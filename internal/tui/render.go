@@ -160,7 +160,11 @@ func (m Model) renderTop() string {
 	if m.toast != "" {
 		segs = append(segs, renderToast(m.toast, m.toastKind))
 	}
-	if m.err != nil && !m.isBootstrapPrompt() {
+	if m.err != nil && m.hasBootstrapIssue() {
+		if !m.isBootstrapPrompt() {
+			segs = append(segs, styleWarn.Render("GitButler setup needed"))
+		}
+	} else if m.err != nil {
 		segs = append(segs, styleErr.Render(glyphCross+" "+m.err.Error()))
 	}
 	return fit(strings.Join(segs, " "+styleHotSep.Render(sepBullet)+" "), m.width)
@@ -648,6 +652,12 @@ func (m Model) previewTitle(focused bool) string {
 func (m Model) laneLines(width, height int) []string {
 	lanes := m.filteredLanes()
 	if len(lanes) == 0 {
+		if m.data.Status == nil && m.hasBootstrapIssue() {
+			if m.isBootstrapPrompt() {
+				return []string{""}
+			}
+			return m.bootstrapLines(width, height)
+		}
 		return []string{styleDim.Render("no branches")}
 	}
 	rows := make([]string, 0, len(lanes))
@@ -655,6 +665,36 @@ func (m Model) laneLines(width, height int) []string {
 		rows = append(rows, m.formatLaneLine(lane, idx, width))
 	}
 	return windowRows(rows, m.laneCursor, height)
+}
+
+func (m Model) bootstrapLines(width, height int) []string {
+	var lines []string
+	if gitbutler.IsCLINotFound(m.err) {
+		lines = []string{
+			styleWarn.Render("GitButler CLI is required"),
+			styleDim.Render("LazyBut delegates Git operations to the official `but` CLI."),
+			"",
+			styleHotKey.Render("i") + " " + styleHotLabel.Render("install GitButler CLI"),
+			styleHotKey.Render("r") + " " + styleHotLabel.Render("refresh after installing"),
+		}
+	} else {
+		lines = []string{
+			styleWarn.Render("Repository is not set up for GitButler"),
+			styleDim.Render("LazyBut can configure this checkout and then load the workspace."),
+			"",
+			styleHotKey.Render("g") + " " + styleHotLabel.Render("run `but setup`"),
+			styleHotKey.Render("G") + " " + styleHotLabel.Render("run `but setup --init`"),
+			styleHotKey.Render("r") + " " + styleHotLabel.Render("refresh after manual setup"),
+		}
+	}
+	lines = append(lines, "", styleDim.Render("Press : to open all actions, or q to quit."))
+	for idx := range lines {
+		lines[idx] = fit(lines[idx], width)
+	}
+	if len(lines) > height {
+		return lines[:height]
+	}
+	return lines
 }
 
 func (m Model) formatLaneLine(lane lane, idx, width int) string {
@@ -1102,6 +1142,9 @@ func (m Model) contextActions() []action {
 	all := m.availableActions()
 	pinned := []actionID{
 		actionRefresh,
+		actionInstallGitButler,
+		actionSetup,
+		actionSetupInit,
 		actionAddBranch,
 		actionNewBranch,
 		actionStage,
@@ -1247,7 +1290,14 @@ func (m Model) renderConfirm() string {
 	if m.confirm.Input != "" {
 		body += "\n\n" + styleDim.Render(m.confirm.Input)
 	}
-	footer := styleHotKey.Render("y") + " " + styleHotLabel.Render("confirm") + "   " + styleHotKey.Render("n/esc") + " " + styleHotLabel.Render("cancel")
+	confirmLabel, cancelLabel := "confirm", "cancel"
+	switch m.confirm.Action.ID {
+	case actionInstallGitButler:
+		confirmLabel, cancelLabel = "install", "later"
+	case actionSetup:
+		confirmLabel, cancelLabel = "run setup", "later"
+	}
+	footer := styleHotKey.Render("enter/y") + " " + styleHotLabel.Render(confirmLabel) + "   " + styleHotKey.Render("esc/n") + " " + styleHotLabel.Render(cancelLabel)
 	return styleOverlay.Width(width).Render(header + "\n\n" + body + "\n\n" + footer)
 }
 
@@ -1762,17 +1812,10 @@ func overlay(base string, width, height int, content string) string {
 		lines = lines[:height]
 	}
 	contentLines := splitLines(content)
-	if len(contentLines) > height {
-		contentLines = contentLines[:height]
+	startX, startY, contentW, contentH := overlayBounds(width, height, content)
+	if len(contentLines) > contentH {
+		contentLines = contentLines[:contentH]
 	}
-	contentW := 0
-	for _, l := range contentLines {
-		if w := lipgloss.Width(l); w > contentW {
-			contentW = w
-		}
-	}
-	startY := max(0, (height-len(contentLines))/2)
-	startX := max(0, (width-contentW)/2)
 	const ansiReset = "\x1b[0m"
 	for idx, modal := range contentLines {
 		y := startY + idx
@@ -1788,6 +1831,22 @@ func overlay(base string, width, height int, content string) string {
 		lines[y] = left + ansiReset + modal + ansiReset + right
 	}
 	return strings.Join(lines, "\n")
+}
+
+func overlayBounds(width, height int, content string) (startX, startY, contentW, contentH int) {
+	contentLines := splitLines(content)
+	if len(contentLines) > height {
+		contentLines = contentLines[:height]
+	}
+	for _, l := range contentLines {
+		if w := lipgloss.Width(l); w > contentW {
+			contentW = w
+		}
+	}
+	contentH = len(contentLines)
+	startY = max(0, (height-contentH)/2)
+	startX = max(0, (width-contentW)/2)
+	return startX, startY, contentW, contentH
 }
 
 // ansiSplit returns the prefix of s spanning the first `cols` visible columns

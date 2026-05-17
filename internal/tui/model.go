@@ -287,6 +287,10 @@ func (m Model) isBootstrapPrompt() bool {
 	return m.mode == modeConfirm && isBootstrapAction(m.confirm.Action.ID) && isBootstrapError(m.err)
 }
 
+func (m Model) hasBootstrapIssue() bool {
+	return isBootstrapError(m.err)
+}
+
 func isBootstrapAction(id actionID) bool {
 	return id == actionInstallGitButler || id == actionSetup
 }
@@ -776,18 +780,33 @@ func (m Model) handleConfirmKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch key.String() {
 	case "y", "enter":
-		action := m.confirm.Action
-		input := m.confirm.Input
-		m.mode = modeNormal
-		m.confirm = confirmState{}
-		return m.execute(action, input)
+		return m.acceptConfirm()
 	case "n", "esc":
-		m.mode = modeNormal
-		m.confirm = confirmState{}
-		return m, nil
+		return m.cancelConfirm()
 	default:
 		return m, nil
 	}
+}
+
+func (m Model) acceptConfirm() (tea.Model, tea.Cmd) {
+	action := m.confirm.Action
+	input := m.confirm.Input
+	m.mode = modeNormal
+	m.confirm = confirmState{}
+	return m.execute(action, input)
+}
+
+func (m Model) cancelConfirm() (tea.Model, tea.Cmd) {
+	actionID := m.confirm.Action.ID
+	m.mode = modeNormal
+	m.confirm = confirmState{}
+	switch actionID {
+	case actionInstallGitButler:
+		m.setToast("GitButler install skipped; press i to install later", toastInfo)
+	case actionSetup:
+		m.setToast("GitButler setup skipped; press g to run setup later", toastInfo)
+	}
+	return m, nil
 }
 
 func (m Model) handleUpstreamConfirmKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -830,6 +849,15 @@ func (m Model) handleUpstreamConfirmKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleConfirmMouse(mouse tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.confirm.Action.ID != actionPull {
+		if mouse.Button == tea.MouseButtonLeft && mouse.Action == tea.MouseActionPress {
+			confirm, cancel := m.genericConfirmFooterAt(mouse.X, mouse.Y)
+			if confirm {
+				return m.acceptConfirm()
+			}
+			if cancel {
+				return m.cancelConfirm()
+			}
+		}
 		return m, nil
 	}
 	lanes := m.upstreamBranchLanes()
@@ -864,6 +892,20 @@ func (m Model) handleConfirmMouse(mouse tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m Model) genericConfirmFooterAt(x, y int) (confirm bool, cancel bool) {
+	startX, startY, width, height := overlayBounds(m.width, m.height, m.renderConfirm())
+	if x < startX || x >= startX+width || y < startY || y >= startY+height {
+		return false, false
+	}
+	if y < startY+height-4 {
+		return false, false
+	}
+	if x < startX+width/2 {
+		return true, false
+	}
+	return false, true
 }
 
 func (m Model) handlePaletteKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {

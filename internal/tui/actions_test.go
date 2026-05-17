@@ -175,6 +175,54 @@ func TestBootstrapPromptIgnoresOutsideMouseClicks(t *testing.T) {
 	}
 }
 
+func TestBootstrapPromptEscDismissesToGuidedState(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	model.width = 120
+
+	nextModel, _ := model.Update(loadedMsg{err: gitbutler.CLIError{Code: "setup_required", Message: "run but setup"}})
+	next := nextModel.(Model)
+	dismissedModel, _ := next.handleConfirmKey(tea.KeyMsg{Type: tea.KeyEsc})
+	dismissed := dismissedModel.(Model)
+
+	if dismissed.mode != modeNormal || dismissed.confirm.Action.ID != "" {
+		t.Fatalf("dismissed = mode %d confirm %#v", dismissed.mode, dismissed.confirm)
+	}
+	if top := dismissed.renderTop(); strings.Contains(top, "setup_required") || strings.Contains(top, "run but setup") {
+		t.Fatalf("dismissed header should stay calm: %q", top)
+	}
+	if !actionIDs(dismissed.availableActions())[actionSetup] {
+		t.Fatal("setup action should remain available after dismissing bootstrap prompt")
+	}
+	lines := strings.Join(dismissed.bootstrapLines(100, 12), "\n")
+	if !strings.Contains(lines, "run `but setup`") {
+		t.Fatalf("bootstrap guidance missing setup action:\n%s", lines)
+	}
+}
+
+func TestGenericConfirmMouseFooter(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	model.width = 100
+	model.height = 30
+	model.mode = modeConfirm
+	model.confirm = confirmState{Action: action{ID: actionRefresh, Label: "refresh", ConfirmText: "Refresh now?"}}
+
+	x, y, w, h := overlayBounds(model.width, model.height, model.renderConfirm())
+	nextModel, cmd := model.handleConfirmMouse(tea.MouseMsg{X: x + 4, Y: y + h - 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	next := nextModel.(Model)
+	if !next.loading || cmd == nil {
+		t.Fatalf("confirm click should execute action, loading=%v cmd nil=%v", next.loading, cmd == nil)
+	}
+
+	model.mode = modeConfirm
+	model.loading = false
+	model.confirm = confirmState{Action: action{ID: actionRefresh, Label: "refresh", ConfirmText: "Refresh now?"}}
+	cancelledModel, cmd := model.handleConfirmMouse(tea.MouseMsg{X: x + w - 4, Y: y + h - 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	cancelled := cancelledModel.(Model)
+	if cancelled.mode != modeNormal || cmd != nil {
+		t.Fatalf("cancel click = mode %d cmd nil=%v", cancelled.mode, cmd == nil)
+	}
+}
+
 func TestBranchActionsIncludeDryRunAndPRLifecycle(t *testing.T) {
 	model := newModel(gitbutler.NewClient(".", nil))
 	model.data = buildWorkspaceData(loadFixtureStatus(t), loadFixtureBranches(t))
