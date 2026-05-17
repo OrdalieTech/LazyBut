@@ -334,6 +334,31 @@ func TestClientParsesCLIError(t *testing.T) {
 	}
 }
 
+func TestClientParsesMixedCLIErrorOutput(t *testing.T) {
+	runner := &fakeRunner{
+		outputs: map[string][]byte{"status -j": []byte(`{
+  "error": "setup_required",
+  "message": "No GitButler project found at .",
+  "hint": "run ` + "`but setup`" + ` to configure the project"
+}
+Error: Setup required: No GitButler project found at .`)},
+		errs: map[string]error{"status -j": errors.New("exit status 1")},
+	}
+	client := NewClient(".", runner)
+
+	_, err := client.Status(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var cliErr CLIError
+	if !errors.As(err, &cliErr) {
+		t.Fatalf("error type = %T, want CLIError", err)
+	}
+	if cliErr.Code != "setup_required" || cliErr.Message == "" || cliErr.Hint == "" {
+		t.Fatalf("cli error = %#v", cliErr)
+	}
+}
+
 func TestParseCommandErrorForMissingBut(t *testing.T) {
 	err := parseCommandError(nil, os.ErrNotExist)
 	if err == nil || !strings.Contains(err.Error(), "GitButler CLI not found") {

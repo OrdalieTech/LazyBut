@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -262,7 +263,7 @@ func (m Model) maybePromptForBootstrap(err error) Model {
 			ID:          actionInstallGitButler,
 			Key:         "i",
 			Label:       "install GitButler CLI",
-			ConfirmText: "GitButler CLI (`but`) is required.\n\nInstall it now from gitbutler.com?",
+			ConfirmText: installGitButlerConfirmText(),
 		}}
 		m.mode = modeConfirm
 	}
@@ -271,11 +272,30 @@ func (m Model) maybePromptForBootstrap(err error) Model {
 			ID:          actionSetup,
 			Key:         "g",
 			Label:       "setup GitButler",
-			ConfirmText: "This repository is not set up for GitButler yet.\n\nRun `but setup` here now?",
+			ConfirmText: setupGitButlerConfirmText(err),
 		}}
 		m.mode = modeConfirm
 	}
 	return m
+}
+
+func installGitButlerConfirmText() string {
+	return "GitButler CLI (`but`) is required.\n\nCommand:\n  curl -fsSL https://gitbutler.com/install.sh | sh\n\nInstall it now?"
+}
+
+func setupGitButlerConfirmText(err error) string {
+	lines := []string{"This repository is not set up for GitButler yet."}
+	var cliErr gitbutler.CLIError
+	if errors.As(err, &cliErr) {
+		if cliErr.Message != "" {
+			lines = append(lines, "", cliErr.Message)
+		}
+		if cliErr.Hint != "" {
+			lines = append(lines, "Hint: "+cliErr.Hint)
+		}
+	}
+	lines = append(lines, "", "Command:", "  but setup", "", "Run it here now?")
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) Init() tea.Cmd {

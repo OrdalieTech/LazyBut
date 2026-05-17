@@ -32,6 +32,7 @@ func SnapshotMode(client *gitbutler.Client, width, height int, overlay string) s
 	if err != nil {
 		model.err = err
 		model.loading = false
+		model = model.maybePromptForBootstrap(err)
 		return model.View()
 	}
 	branches, err := client.BranchList(ctx)

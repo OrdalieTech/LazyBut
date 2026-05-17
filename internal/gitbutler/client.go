@@ -300,8 +300,7 @@ func parseCommandError(raw []byte, runErr error) error {
 	if errors.Is(runErr, exec.ErrNotFound) || errors.Is(runErr, os.ErrNotExist) {
 		return fmt.Errorf("GitButler CLI not found: %v: %w", runErr, ErrCLINotFound)
 	}
-	var cliErr CLIError
-	if err := json.Unmarshal(raw, &cliErr); err == nil && (cliErr.Code != "" || cliErr.Message != "") {
+	if cliErr, ok := parseCLIError(raw); ok {
 		return cliErr
 	}
 	text := strings.TrimSpace(string(raw))
@@ -311,11 +310,47 @@ func parseCommandError(raw []byte, runErr error) error {
 	return fmt.Errorf("%s: %s", runErr, text)
 }
 
+func parseCLIError(raw []byte) (CLIError, bool) {
+	var cliErr CLIError
+	if err := json.Unmarshal(raw, &cliErr); err == nil && (cliErr.Code != "" || cliErr.Message != "") {
+		return cliErr, true
+	}
+	text := strings.TrimSpace(string(raw))
+	start := strings.Index(text, "{")
+	end := strings.LastIndex(text, "}")
+	if start >= 0 && end > start {
+		if err := json.Unmarshal([]byte(text[start:end+1]), &cliErr); err == nil && (cliErr.Code != "" || cliErr.Message != "") {
+			return cliErr, true
+		}
+	}
+	if strings.Contains(text, "setup_required") || strings.Contains(strings.ToLower(text), "setup required") {
+		return CLIError{Code: "setup_required", Message: firstNonEmptyLine(text)}, true
+	}
+	return CLIError{}, false
+}
+
+func firstNonEmptyLine(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
 func IsCLINotFound(err error) bool {
 	return errors.Is(err, ErrCLINotFound)
 }
 
 func IsSetupRequired(err error) bool {
+	if err == nil {
+		return false
+	}
 	var cliErr CLIError
-	return errors.As(err, &cliErr) && cliErr.Code == "setup_required"
+	if errors.As(err, &cliErr) && cliErr.Code == "setup_required" {
+		return true
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "setup_required") || strings.Contains(text, "setup required")
 }

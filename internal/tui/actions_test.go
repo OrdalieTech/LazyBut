@@ -140,10 +140,18 @@ func TestBootstrapPromptForMissingGitButlerCLI(t *testing.T) {
 func TestBootstrapPromptForGitButlerSetup(t *testing.T) {
 	model := newModel(gitbutler.NewClient(".", nil))
 
-	nextModel, _ := model.Update(loadedMsg{err: gitbutler.CLIError{Code: "setup_required", Message: "run but setup"}})
+	nextModel, _ := model.Update(loadedMsg{err: gitbutler.CLIError{
+		Code:    "setup_required",
+		Message: "No GitButler project found at .",
+		Hint:    "run `but setup` to configure the project",
+	}})
 	next := nextModel.(Model)
 	if next.mode != modeConfirm || next.confirm.Action.ID != actionSetup {
 		t.Fatalf("confirm = mode %d action %#v", next.mode, next.confirm.Action)
+	}
+	if !strings.Contains(next.confirm.Action.ConfirmText, "No GitButler project found at .") ||
+		!strings.Contains(next.confirm.Action.ConfirmText, "but setup") {
+		t.Fatalf("confirm text = %q", next.confirm.Action.ConfirmText)
 	}
 }
 
