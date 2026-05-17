@@ -1,0 +1,39 @@
+{
+  "appliedStacks": [
+    {
+      "id": "g0",
+      "heads": [
+        {
+          "name": "feature/ui",
+          "reviews": [
+            {
+              "number": 724,
+              "url": "https://example.test/pull/724"
+            }
+          ],
+          "lastCommitAt": 1779012000000,
+          "commitsAhead": 1,
+          "lastAuthor": {
+            "name": "Test User",
+            "email": "test@example.com"
+          },
+          "mergesCleanly": false
+        }
+      ]
+    }
+  ],
+  "branches": [
+    {
+      "name": "feature/unapplied",
+      "reviews": [],
+      "hasLocal": true,
+      "lastCommitAt": 1779011000000,
+      "commitsAhead": 3,
+      "lastAuthor": {
+        "name": "Test User",
+        "email": "test@example.com"
+      },
+      "mergesCleanly": true
+    }
+  ]
+}

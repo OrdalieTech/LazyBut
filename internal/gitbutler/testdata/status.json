@@ -1,0 +1,87 @@
+{
+  "unassignedChanges": [
+    {
+      "cliId": "ur",
+      "filePath": "cmd/lazybut/main.go",
+      "changeType": "modified"
+    }
+  ],
+  "stacks": [
+    {
+      "cliId": "g0",
+      "assignedChanges": [
+        {
+          "cliId": "ae:sv",
+          "filePath": "internal/tui/model.go",
+          "changeType": "added"
+        }
+      ],
+      "branches": [
+        {
+          "cliId": "ma",
+          "name": "feature/ui",
+          "commits": [
+            {
+              "cliId": "c1",
+              "commitId": "0123456789abcdef",
+              "createdAt": "2026-05-17 12:00:00 +0200",
+              "message": "build tui shell",
+              "authorName": "Test User",
+              "authorEmail": "test@example.com",
+              "conflicted": false,
+              "reviewId": null,
+              "changes": [
+                {
+                  "cliId": "c1:f1",
+                  "filePath": "internal/tui/render.go",
+                  "changeType": "modified"
+                }
+              ]
+            }
+          ],
+          "upstreamCommits": [],
+          "branchStatus": "unpushedCommits",
+          "reviewId": "724",
+          "ci": {
+            "overallConclusion": "success",
+            "pendingCheckTitles": [],
+            "passingCheckTitles": ["test"],
+            "failingCheckTitles": []
+          },
+          "mergeStatus": {
+            "conflicted": {
+              "rebasable": true
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "mergeBase": {
+    "cliId": "mb",
+    "commitId": "abcdef",
+    "createdAt": "2026-05-16 12:00:00 +0200",
+    "message": "base",
+    "authorName": "Test User",
+    "authorEmail": "test@example.com",
+    "conflicted": null,
+    "reviewId": null,
+    "changes": null
+  },
+  "upstreamState": {
+    "behind": 2,
+    "latestCommit": {
+      "cliId": "up",
+      "commitId": "fedcba",
+      "createdAt": "2026-05-17 11:00:00 +0200",
+      "message": "upstream",
+      "authorName": "Test User",
+      "authorEmail": "test@example.com",
+      "conflicted": null,
+      "reviewId": null,
+      "changes": null
+    },
+    "lastFetched": "2026-05-17T12:00:00Z",
+    "upstreamCommits": []
+  }
+}
