@@ -1,4 +1,4 @@
-module github.com/b-arbaretier/lazybutler
+module github.com/OrdalieTech/LazyBut
 
 go 1.26
 

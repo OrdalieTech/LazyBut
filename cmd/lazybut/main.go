@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/b-arbaretier/lazybutler/internal/gitbutler"
-	"github.com/b-arbaretier/lazybutler/internal/tui"
+	"github.com/OrdalieTech/LazyBut/internal/gitbutler"
+	"github.com/OrdalieTech/LazyBut/internal/tui"
 )
 
 func main() {

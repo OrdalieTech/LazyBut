@@ -11,7 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/ansi"
 
-	"github.com/b-arbaretier/lazybutler/internal/gitbutler"
+	"github.com/OrdalieTech/LazyBut/internal/gitbutler"
 )
 
 var (

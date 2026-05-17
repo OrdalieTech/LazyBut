@@ -11,7 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/b-arbaretier/lazybutler/internal/gitbutler"
+	"github.com/OrdalieTech/LazyBut/internal/gitbutler"
 )
 
 type actionRunner struct {

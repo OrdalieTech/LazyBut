@@ -7,7 +7,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 
-	"github.com/b-arbaretier/lazybutler/internal/gitbutler"
+	"github.com/OrdalieTech/LazyBut/internal/gitbutler"
 )
 
 // Snapshot renders one frame at the given size. When stdout is not a real

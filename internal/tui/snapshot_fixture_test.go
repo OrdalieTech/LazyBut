@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/b-arbaretier/lazybutler/internal/gitbutler"
+	"github.com/OrdalieTech/LazyBut/internal/gitbutler"
 )
 
 // TestDumpFixtureRender writes a fixture-driven view to /tmp/lazybut-vis/fixture.txt

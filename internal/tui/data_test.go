@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/b-arbaretier/lazybutler/internal/gitbutler"
+	"github.com/OrdalieTech/LazyBut/internal/gitbutler"
 )
 
 func loadFixtureStatus(t *testing.T) *gitbutler.WorkspaceStatus {

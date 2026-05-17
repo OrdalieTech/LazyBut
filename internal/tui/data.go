@@ -1,6 +1,6 @@
 package tui
 
-import "github.com/b-arbaretier/lazybutler/internal/gitbutler"
+import "github.com/OrdalieTech/LazyBut/internal/gitbutler"
 
 type laneKind int
 
