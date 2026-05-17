@@ -160,7 +160,7 @@ func (m Model) renderTop() string {
 	if m.toast != "" {
 		segs = append(segs, renderToast(m.toast, m.toastKind))
 	}
-	if m.err != nil {
+	if m.err != nil && !m.isBootstrapPrompt() {
 		segs = append(segs, styleErr.Render(glyphCross+" "+m.err.Error()))
 	}
 	return fit(strings.Join(segs, " "+styleHotSep.Render(sepBullet)+" "), m.width)

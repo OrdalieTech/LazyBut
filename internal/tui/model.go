@@ -279,6 +279,18 @@ func (m Model) maybePromptForBootstrap(err error) Model {
 	return m
 }
 
+func isBootstrapError(err error) bool {
+	return gitbutler.IsCLINotFound(err) || gitbutler.IsSetupRequired(err)
+}
+
+func (m Model) isBootstrapPrompt() bool {
+	return m.mode == modeConfirm && isBootstrapAction(m.confirm.Action.ID) && isBootstrapError(m.err)
+}
+
+func isBootstrapAction(id actionID) bool {
+	return id == actionInstallGitButler || id == actionSetup
+}
+
 func installGitButlerConfirmText() string {
 	return "GitButler CLI (`but`) is required.\n\nCommand:\n  curl -fsSL https://gitbutler.com/install.sh | sh\n\nInstall it now?"
 }
@@ -330,6 +342,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err == nil {
 			m = m.replaceData(msg.status, msg.branches)
 			return m.withPreview()
+		}
+		if isBootstrapError(msg.err) {
+			return m.maybePromptForBootstrap(msg.err), nil
 		}
 		m.setToast(msg.err.Error(), toastError)
 		return m.maybePromptForBootstrap(msg.err), nil
@@ -815,10 +830,6 @@ func (m Model) handleUpstreamConfirmKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleConfirmMouse(mouse tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.confirm.Action.ID != actionPull {
-		if mouse.Button == tea.MouseButtonLeft && mouse.Action == tea.MouseActionPress {
-			m.mode = modeNormal
-			m.confirm = confirmState{}
-		}
 		return m, nil
 	}
 	lanes := m.upstreamBranchLanes()

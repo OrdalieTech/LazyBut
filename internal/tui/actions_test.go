@@ -139,6 +139,7 @@ func TestBootstrapPromptForMissingGitButlerCLI(t *testing.T) {
 
 func TestBootstrapPromptForGitButlerSetup(t *testing.T) {
 	model := newModel(gitbutler.NewClient(".", nil))
+	model.width = 120
 
 	nextModel, _ := model.Update(loadedMsg{err: gitbutler.CLIError{
 		Code:    "setup_required",
@@ -152,6 +153,25 @@ func TestBootstrapPromptForGitButlerSetup(t *testing.T) {
 	if !strings.Contains(next.confirm.Action.ConfirmText, "No GitButler project found at .") ||
 		!strings.Contains(next.confirm.Action.ConfirmText, "but setup") {
 		t.Fatalf("confirm text = %q", next.confirm.Action.ConfirmText)
+	}
+	if next.toast != "" {
+		t.Fatalf("bootstrap setup should not show error toast: %q", next.toast)
+	}
+	if top := next.renderTop(); strings.Contains(top, "setup_required") || strings.Contains(top, "No GitButler project") {
+		t.Fatalf("bootstrap setup should not pollute header: %q", top)
+	}
+}
+
+func TestBootstrapPromptIgnoresOutsideMouseClicks(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+
+	nextModel, _ := model.Update(loadedMsg{err: gitbutler.CLIError{Code: "setup_required", Message: "run but setup"}})
+	next := nextModel.(Model)
+
+	clickedModel, _ := next.handleConfirmMouse(tea.MouseMsg{X: 1, Y: 1, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	clicked := clickedModel.(Model)
+	if clicked.mode != modeConfirm || clicked.confirm.Action.ID != actionSetup {
+		t.Fatalf("outside click dismissed bootstrap prompt: mode %d action %#v", clicked.mode, clicked.confirm.Action)
 	}
 }
 
