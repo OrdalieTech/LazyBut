@@ -9,6 +9,12 @@ the terminal companion: it keeps `zz` unassigned changes, active branch stacks, 
 file or hunk IDs, previews, push state, upstream state, and PR-oriented actions visible
 without leaving the CLI.
 
+It is especially built for AI-agent-heavy development. GitButler's virtual branches are
+a strong fit when several agents, assistants, or parallel workstreams touch the same
+repository: each unit of work can stay isolated, reviewed, pushed, updated, or discarded
+without losing the broader workspace context. LazyBut makes that agent-oriented workflow
+usable directly from the terminal.
+
 ## Status
 
 This is an early, usable prototype. It is intentionally small and delegates all real
@@ -16,15 +22,38 @@ GitButler behavior to the official `but` CLI instead of reimplementing Git logic
 
 ## Requirements
 
-- Go 1.24+
 - GitButler CLI available as `but`
 - A Git repository, preferably already set up for GitButler
 - A terminal with color support; mouse support is optional but enabled when available
+- Go 1.26+ only if building from source
 
-## Install / Run
+## Install
+
+macOS and Linux:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/OrdalieTech/LazyBut/main/install.sh | bash
+```
+
+This downloads the latest release binary. By default it installs to `/usr/local/bin`
+when writable, otherwise to `~/.local/bin`.
+
+Override the install directory or version:
+
+```sh
+LAZYBUT_INSTALL_DIR="$HOME/bin" curl -fsSL https://raw.githubusercontent.com/OrdalieTech/LazyBut/main/install.sh | bash
+LAZYBUT_VERSION=v0.1.0 curl -fsSL https://raw.githubusercontent.com/OrdalieTech/LazyBut/main/install.sh | bash
+```
+
+Go install also works:
 
 ```sh
 go install github.com/OrdalieTech/LazyBut/cmd/lazybut@latest
+```
+
+## Run
+
+```sh
 lazybut -C /path/to/gitbutler/repo
 ```
 
@@ -43,6 +72,7 @@ go run ./cmd/lazybut -C /path/to/gitbutler/repo -snapshot 120x36
 ## What It Does
 
 - Shows GitButler's active workspace: `zz` unassigned changes plus active applied branches/stacks.
+- Keeps AI-agent workstreams visible by making GitButler's virtual branches and unassigned work easy to inspect from the terminal.
 - Provides LazyGit-style keyboard navigation: `h/l` or arrows between panels, `j/k` or arrows inside lists.
 - Supports a wide-terminal kanban view inspired by the GitButler desktop workspace.
 - Falls back to compact pane layouts on medium and narrow terminals.
@@ -122,4 +152,4 @@ branches, unassigned work, branch stacks, hunk/file IDs, and workspace updates.
 
 ## License
 
-Not specified yet.
+MIT
