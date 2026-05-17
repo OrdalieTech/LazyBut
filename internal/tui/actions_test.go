@@ -114,6 +114,39 @@ func TestSetupActionsAvailableWithoutStatus(t *testing.T) {
 	}
 }
 
+func TestInstallActionAvailableWhenGitButlerCLIMissing(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	model.err = gitbutler.ErrCLINotFound
+
+	seen := actionIDs(model.availableActions())
+	if !seen[actionInstallGitButler] {
+		t.Fatalf("install action missing: %#v", seen)
+	}
+	if seen[actionSetup] || seen[actionSetupInit] {
+		t.Fatalf("setup actions should wait until but exists: %#v", seen)
+	}
+}
+
+func TestBootstrapPromptForMissingGitButlerCLI(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+
+	nextModel, _ := model.Update(loadedMsg{err: gitbutler.ErrCLINotFound})
+	next := nextModel.(Model)
+	if next.mode != modeConfirm || next.confirm.Action.ID != actionInstallGitButler {
+		t.Fatalf("confirm = mode %d action %#v", next.mode, next.confirm.Action)
+	}
+}
+
+func TestBootstrapPromptForGitButlerSetup(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+
+	nextModel, _ := model.Update(loadedMsg{err: gitbutler.CLIError{Code: "setup_required", Message: "run but setup"}})
+	next := nextModel.(Model)
+	if next.mode != modeConfirm || next.confirm.Action.ID != actionSetup {
+		t.Fatalf("confirm = mode %d action %#v", next.mode, next.confirm.Action)
+	}
+}
+
 func TestBranchActionsIncludeDryRunAndPRLifecycle(t *testing.T) {
 	model := newModel(gitbutler.NewClient(".", nil))
 	model.data = buildWorkspaceData(loadFixtureStatus(t), loadFixtureBranches(t))

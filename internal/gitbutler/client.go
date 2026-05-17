@@ -18,6 +18,8 @@ type ExecRunner struct {
 	Bin string
 }
 
+var ErrCLINotFound = errors.New("gitbutler cli not found")
+
 func (r ExecRunner) Run(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	bin := r.Bin
 	if bin == "" {
@@ -296,7 +298,7 @@ func (c *Client) runner() Runner {
 
 func parseCommandError(raw []byte, runErr error) error {
 	if errors.Is(runErr, exec.ErrNotFound) || errors.Is(runErr, os.ErrNotExist) {
-		return fmt.Errorf("GitButler CLI not found: %w", runErr)
+		return fmt.Errorf("GitButler CLI not found: %v: %w", runErr, ErrCLINotFound)
 	}
 	var cliErr CLIError
 	if err := json.Unmarshal(raw, &cliErr); err == nil && (cliErr.Code != "" || cliErr.Message != "") {
@@ -307,4 +309,13 @@ func parseCommandError(raw []byte, runErr error) error {
 		return runErr
 	}
 	return fmt.Errorf("%s: %s", runErr, text)
+}
+
+func IsCLINotFound(err error) bool {
+	return errors.Is(err, ErrCLINotFound)
+}
+
+func IsSetupRequired(err error) bool {
+	var cliErr CLIError
+	return errors.As(err, &cliErr) && cliErr.Code == "setup_required"
 }

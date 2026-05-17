@@ -1195,6 +1195,8 @@ func actionShortLabel(a action) string {
 		return "finish"
 	case actionResolveCancel:
 		return "cancel"
+	case actionInstallGitButler:
+		return "install"
 	case actionSetup:
 		return "setup"
 	case actionSetupInit:

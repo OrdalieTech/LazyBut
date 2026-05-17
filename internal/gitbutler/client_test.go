@@ -329,11 +329,17 @@ func TestClientParsesCLIError(t *testing.T) {
 	if cliErr.Code != "setup_required" {
 		t.Fatalf("code = %q", cliErr.Code)
 	}
+	if !IsSetupRequired(err) {
+		t.Fatalf("setup_required helper missed: %v", err)
+	}
 }
 
 func TestParseCommandErrorForMissingBut(t *testing.T) {
 	err := parseCommandError(nil, os.ErrNotExist)
 	if err == nil || !strings.Contains(err.Error(), "GitButler CLI not found") {
 		t.Fatalf("error = %v", err)
+	}
+	if !IsCLINotFound(err) {
+		t.Fatalf("cli-not-found helper missed: %v", err)
 	}
 }

@@ -1,5 +1,7 @@
 package tui
 
+import "github.com/OrdalieTech/LazyBut/internal/gitbutler"
+
 func (m Model) availableActions() []action {
 	lane, hasLane := m.selectedLane()
 	item, hasItem := m.selectedContent()
@@ -9,11 +11,21 @@ func (m Model) availableActions() []action {
 	isCommit := hasItem && (item.Kind == contentCommit || item.Kind == contentUpstreamCommit) && item.ID != ""
 
 	if m.data.Status == nil {
-		return []action{
+		actions := []action{
 			{ID: actionRefresh, Key: "r", Aliases: []string{"ctrl+r"}, Label: "refresh"},
-			{ID: actionSetup, Key: "g", Label: "setup GitButler", ConfirmText: "Run `but setup` in this repo?"},
-			{ID: actionSetupInit, Key: "G", Label: "init and setup GitButler", Dangerous: true, ConfirmText: "Run `but setup --init` here?"},
 		}
+		if gitbutler.IsCLINotFound(m.err) {
+			return append(actions, action{
+				ID:          actionInstallGitButler,
+				Key:         "i",
+				Label:       "install GitButler CLI",
+				ConfirmText: "GitButler CLI (`but`) is required.\n\nInstall it now from gitbutler.com?",
+			})
+		}
+		return append(actions,
+			action{ID: actionSetup, Key: "g", Label: "setup GitButler", ConfirmText: "Run `but setup` in this repo?"},
+			action{ID: actionSetupInit, Key: "G", Label: "init and setup GitButler", Dangerous: true, ConfirmText: "Run `but setup --init` here?"},
+		)
 	}
 
 	actions := []action{

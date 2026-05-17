@@ -4,6 +4,7 @@ set -euo pipefail
 repo="OrdalieTech/LazyBut"
 bin="lazybut"
 version="${LAZYBUT_VERSION:-latest}"
+gitbutler_install_url="https://gitbutler.com/install.sh"
 
 os="$(uname -s | tr '[:upper:]' '[:lower:]')"
 arch="$(uname -m)"
@@ -47,4 +48,31 @@ if [[ ":${PATH}:" != *":${install_dir}:"* ]]; then
   echo "Note: ${install_dir} is not in your PATH."
   echo "Add this to your shell profile:"
   echo "  export PATH=\"${install_dir}:\$PATH\""
+fi
+
+install_gitbutler_cli() {
+  echo "Installing GitButler CLI ('but')..."
+  curl -fsSL "$gitbutler_install_url" | sh
+}
+
+if command -v but >/dev/null 2>&1; then
+  echo "GitButler CLI found: $(command -v but)"
+elif [[ "${LAZYBUT_INSTALL_GITBUTLER:-}" == "1" ]]; then
+  install_gitbutler_cli
+elif [[ "${LAZYBUT_INSTALL_GITBUTLER:-}" == "0" ]]; then
+  echo "GitButler CLI not installed. LazyBut needs 'but' to run."
+  echo "Install later with: curl -fsSL ${gitbutler_install_url} | sh"
+elif [[ -r /dev/tty ]]; then
+  printf "GitButler CLI ('but') is required. Install it now? [y/N] " > /dev/tty
+  read -r answer < /dev/tty
+  case "$answer" in
+    y|Y|yes|YES) install_gitbutler_cli ;;
+    *)
+      echo "GitButler CLI not installed. LazyBut needs 'but' to run."
+      echo "Install later with: curl -fsSL ${gitbutler_install_url} | sh"
+      ;;
+  esac
+else
+  echo "GitButler CLI not installed. LazyBut needs 'but' to run."
+  echo "Install with: curl -fsSL ${gitbutler_install_url} | sh"
 fi

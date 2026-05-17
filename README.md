@@ -22,8 +22,8 @@ GitButler behavior to the official `but` CLI instead of reimplementing Git logic
 
 ## Requirements
 
-- GitButler CLI available as `but`
-- A Git repository, preferably already set up for GitButler
+- GitButler CLI available as `but` (the installer can install it for you)
+- A Git repository; LazyBut can offer to run `but setup` on first start
 - A terminal with color support; mouse support is optional but enabled when available
 - Go 1.26+ only if building from source
 
@@ -36,13 +36,21 @@ curl -fsSL https://raw.githubusercontent.com/OrdalieTech/LazyBut/main/install.sh
 ```
 
 This downloads the latest release binary. By default it installs to `/usr/local/bin`
-when writable, otherwise to `~/.local/bin`.
+when writable, otherwise to `~/.local/bin`. If `but` is not found, the installer
+asks whether it should install the official GitButler CLI too.
 
 Override the install directory or version:
 
 ```sh
 LAZYBUT_INSTALL_DIR="$HOME/bin" curl -fsSL https://raw.githubusercontent.com/OrdalieTech/LazyBut/main/install.sh | bash
 LAZYBUT_VERSION=v0.1.0 curl -fsSL https://raw.githubusercontent.com/OrdalieTech/LazyBut/main/install.sh | bash
+```
+
+For non-interactive installs:
+
+```sh
+LAZYBUT_INSTALL_GITBUTLER=1 curl -fsSL https://raw.githubusercontent.com/OrdalieTech/LazyBut/main/install.sh | bash
+LAZYBUT_INSTALL_GITBUTLER=0 curl -fsSL https://raw.githubusercontent.com/OrdalieTech/LazyBut/main/install.sh | bash
 ```
 
 Go install also works:
@@ -56,6 +64,10 @@ go install github.com/OrdalieTech/LazyBut/cmd/lazybut@latest
 ```sh
 lazybut -C /path/to/gitbutler/repo
 ```
+
+On startup, LazyBut checks the current repository. If the GitButler CLI is missing,
+it opens an install confirmation. If the repo is not configured for GitButler yet,
+it offers to run `but setup` before loading the workspace.
 
 From a checkout:
 

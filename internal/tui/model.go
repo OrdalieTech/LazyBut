@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -41,42 +42,43 @@ const (
 type actionID string
 
 const (
-	actionRefresh       actionID = "refresh"
-	actionSetup         actionID = "setup"
-	actionSetupInit     actionID = "setup_init"
-	actionAddBranch     actionID = "add_branch"
-	actionNewBranch     actionID = "new_branch"
-	actionNewStacked    actionID = "new_stacked_branch"
-	actionStage         actionID = "stage"
-	actionApplyToggle   actionID = "apply_toggle"
-	actionCommit        actionID = "commit"
-	actionRename        actionID = "rename"
-	actionDelete        actionID = "delete"
-	actionDiscard       actionID = "discard"
-	actionAmend         actionID = "amend"
-	actionAbsorb        actionID = "absorb"
-	actionSquash        actionID = "squash"
-	actionUncommit      actionID = "uncommit"
-	actionMove          actionID = "move"
-	actionRub           actionID = "rub"
-	actionMerge         actionID = "merge"
-	actionPullCheck     actionID = "pull_check"
-	actionPull          actionID = "pull"
-	actionPush          actionID = "push"
-	actionPushDryRun    actionID = "push_dry_run"
-	actionForcePush     actionID = "force_push"
-	actionNewPR         actionID = "new_pr"
-	actionNewDraftPR    actionID = "new_draft_pr"
-	actionPRDraft       actionID = "pr_draft"
-	actionPRReady       actionID = "pr_ready"
-	actionResolveStatus actionID = "resolve_status"
-	actionResolveFinish actionID = "resolve_finish"
-	actionResolveCancel actionID = "resolve_cancel"
-	actionUndo          actionID = "undo"
-	actionSnapshot      actionID = "snapshot"
-	actionRestore       actionID = "restore"
-	actionCleanDryRun   actionID = "clean_dry_run"
-	actionClean         actionID = "clean"
+	actionRefresh          actionID = "refresh"
+	actionInstallGitButler actionID = "install_gitbutler"
+	actionSetup            actionID = "setup"
+	actionSetupInit        actionID = "setup_init"
+	actionAddBranch        actionID = "add_branch"
+	actionNewBranch        actionID = "new_branch"
+	actionNewStacked       actionID = "new_stacked_branch"
+	actionStage            actionID = "stage"
+	actionApplyToggle      actionID = "apply_toggle"
+	actionCommit           actionID = "commit"
+	actionRename           actionID = "rename"
+	actionDelete           actionID = "delete"
+	actionDiscard          actionID = "discard"
+	actionAmend            actionID = "amend"
+	actionAbsorb           actionID = "absorb"
+	actionSquash           actionID = "squash"
+	actionUncommit         actionID = "uncommit"
+	actionMove             actionID = "move"
+	actionRub              actionID = "rub"
+	actionMerge            actionID = "merge"
+	actionPullCheck        actionID = "pull_check"
+	actionPull             actionID = "pull"
+	actionPush             actionID = "push"
+	actionPushDryRun       actionID = "push_dry_run"
+	actionForcePush        actionID = "force_push"
+	actionNewPR            actionID = "new_pr"
+	actionNewDraftPR       actionID = "new_draft_pr"
+	actionPRDraft          actionID = "pr_draft"
+	actionPRReady          actionID = "pr_ready"
+	actionResolveStatus    actionID = "resolve_status"
+	actionResolveFinish    actionID = "resolve_finish"
+	actionResolveCancel    actionID = "resolve_cancel"
+	actionUndo             actionID = "undo"
+	actionSnapshot         actionID = "snapshot"
+	actionRestore          actionID = "restore"
+	actionCleanDryRun      actionID = "clean_dry_run"
+	actionClean            actionID = "clean"
 )
 
 type action struct {
@@ -230,6 +232,11 @@ type textMsg struct {
 	err    error
 }
 
+type installGitButlerMsg struct {
+	body string
+	err  error
+}
+
 func Run(client *gitbutler.Client) error {
 	_, err := tea.NewProgram(newModel(client), tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
@@ -244,6 +251,31 @@ func newModel(client *gitbutler.Client) Model {
 		selected:    map[string]bool{},
 		rangeAnchor: -1,
 	}
+}
+
+func (m Model) maybePromptForBootstrap(err error) Model {
+	if err == nil || m.mode != modeNormal {
+		return m
+	}
+	if gitbutler.IsCLINotFound(err) {
+		m.confirm = confirmState{Action: action{
+			ID:          actionInstallGitButler,
+			Key:         "i",
+			Label:       "install GitButler CLI",
+			ConfirmText: "GitButler CLI (`but`) is required.\n\nInstall it now from gitbutler.com?",
+		}}
+		m.mode = modeConfirm
+	}
+	if gitbutler.IsSetupRequired(err) {
+		m.confirm = confirmState{Action: action{
+			ID:          actionSetup,
+			Key:         "g",
+			Label:       "setup GitButler",
+			ConfirmText: "This repository is not set up for GitButler yet.\n\nRun `but setup` here now?",
+		}}
+		m.mode = modeConfirm
+	}
+	return m
 }
 
 func (m Model) Init() tea.Cmd {
@@ -280,7 +312,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.withPreview()
 		}
 		m.setToast(msg.err.Error(), toastError)
-		return m, nil
+		return m.maybePromptForBootstrap(msg.err), nil
 	case upstreamRefreshMsg:
 		m.loading = false
 		m.err = msg.err
@@ -310,6 +342,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setToast(msg.err.Error(), toastError)
 		}
 		return m, nil
+	case installGitButlerMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.err = fmt.Errorf("%w: %s", msg.err, strings.TrimSpace(msg.body))
+			m.setToast(m.err.Error(), toastError)
+			return m, nil
+		}
+		m.err = nil
+		m.setToast("GitButler CLI installed; refreshing", toastSuccess)
+		return m.startLoading(), m.refreshCmd()
 	case tickMsg:
 		m.spinnerFrame++
 		// Toast auto-fades after a few seconds.
@@ -1290,6 +1332,8 @@ func (m Model) execute(action action, input string) (tea.Model, tea.Cmd) {
 		return m.openBranchPicker()
 	case actionRefresh:
 		return m.startLoading(), m.refreshCmd()
+	case actionInstallGitButler:
+		return m.startLoading(), m.installGitButlerCmd()
 	case actionSetup:
 		return m.startLoading(), m.mutationCmd("GitButler setup complete", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Setup(ctx, false)
@@ -1549,6 +1593,16 @@ func (m Model) refreshCmd() tea.Cmd {
 		}
 		branches, err := client.BranchList(ctx)
 		return loadedMsg{status: status, branches: branches, err: err}
+	}
+}
+
+func (m Model) installGitButlerCmd() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "sh", "-c", "curl -fsSL https://gitbutler.com/install.sh | sh")
+		out, err := cmd.CombinedOutput()
+		return installGitButlerMsg{body: string(out), err: err}
 	}
 }
 
