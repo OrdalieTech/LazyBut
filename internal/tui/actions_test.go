@@ -357,6 +357,36 @@ func TestAddBranchPickerAppliesInactiveBranch(t *testing.T) {
 	}
 }
 
+func TestAddBranchPickerLazyLoadsBranchList(t *testing.T) {
+	branchesRaw, err := os.ReadFile("../gitbutler/testdata/branch_list.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &actionRunner{outputs: map[string][]byte{
+		"branch list -j --all": branchesRaw,
+	}}
+	model := newModel(gitbutler.NewClient(".", runner))
+	model.data = buildWorkspaceData(loadFixtureStatus(t), nil)
+
+	nextModel, cmd := model.openBranchPicker()
+	next := nextModel.(Model)
+	if !next.loading || cmd == nil {
+		t.Fatalf("expected lazy branch-list load, loading=%v cmd nil=%v", next.loading, cmd == nil)
+	}
+	msg, ok := cmd().(branchListMsg)
+	if !ok {
+		t.Fatalf("message = %T, want branchListMsg", msg)
+	}
+	openedModel, _ := next.Update(msg)
+	opened := openedModel.(Model)
+	if opened.mode != modeBranchPicker || len(opened.data.BranchOptions) == 0 {
+		t.Fatalf("picker mode/options = %d/%d", opened.mode, len(opened.data.BranchOptions))
+	}
+	if !reflect.DeepEqual(runner.calls, [][]string{{"branch", "list", "-j", "--all"}}) {
+		t.Fatalf("calls = %#v", runner.calls)
+	}
+}
+
 func TestBranchPickerMouseWheelMovesSelection(t *testing.T) {
 	model := newModel(gitbutler.NewClient(".", nil))
 	model.data = buildWorkspaceData(loadFixtureStatus(t), loadFixtureBranches(t))
@@ -376,10 +406,6 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	branchesRaw, err := os.ReadFile("../gitbutler/testdata/branch_list.json")
-	if err != nil {
-		t.Fatal(err)
-	}
 	wrapped := append([]byte(`{"result":{},"status":`), statusRaw...)
 	wrapped = append(wrapped, '}')
 
@@ -396,10 +422,9 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 			name: "refresh",
 			id:   actionRefresh,
 			outputs: map[string][]byte{
-				"status -j":            statusRaw,
-				"branch list -j --all": branchesRaw,
+				"status -j": statusRaw,
 			},
-			want: [][]string{{"status", "-j"}, {"branch", "list", "-j", "--all"}},
+			want: [][]string{{"status", "-j"}},
 		},
 		{
 			name: "setup",
@@ -781,13 +806,8 @@ func TestUpdateFromUpstreamRefreshesBeforeSayingNoUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	branchesRaw, err := os.ReadFile("../gitbutler/testdata/branch_list.json")
-	if err != nil {
-		t.Fatal(err)
-	}
 	runner := &actionRunner{outputs: map[string][]byte{
-		"status -j":            statusRaw,
-		"branch list -j --all": branchesRaw,
+		"status -j": statusRaw,
 	}}
 	model = newModel(gitbutler.NewClient(".", runner))
 	model.data = buildWorkspaceData(status, loadFixtureBranches(t))
@@ -856,12 +876,8 @@ func TestUpstreamConfirmNavigationAndDryCheck(t *testing.T) {
 	}
 }
 
-func TestAutoRefreshStatusOnlyAndBranchRefresh(t *testing.T) {
+func TestAutoRefreshStatusOnly(t *testing.T) {
 	statusRaw, err := os.ReadFile("../gitbutler/testdata/status.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	branchesRaw, err := os.ReadFile("../gitbutler/testdata/branch_list.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -887,20 +903,19 @@ func TestAutoRefreshStatusOnlyAndBranchRefresh(t *testing.T) {
 	}
 
 	runner = &actionRunner{outputs: map[string][]byte{
-		"status -j":            statusRaw,
-		"branch list -j --all": branchesRaw,
+		"status -j": statusRaw,
 	}}
 	model = newModel(gitbutler.NewClient(".", runner))
 	model.loading = false
 	model.data = buildWorkspaceData(loadFixtureStatus(t), loadFixtureBranches(t))
 	_, cmd = model.requestAutoRefresh(true)
 	if cmd == nil {
-		t.Fatal("expected branch auto-refresh command")
+		t.Fatal("expected coalesced auto-refresh command")
 	}
 	if _, ok := cmd().(autoRefreshMsg); !ok {
-		t.Fatalf("unexpected message from branch auto refresh")
+		t.Fatalf("unexpected message from auto refresh")
 	}
-	if !reflect.DeepEqual(runner.calls, [][]string{{"status", "-j"}, {"branch", "list", "-j", "--all"}}) {
+	if !reflect.DeepEqual(runner.calls, [][]string{{"status", "-j"}}) {
 		t.Fatalf("calls = %#v", runner.calls)
 	}
 }

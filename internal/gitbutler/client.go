@@ -27,7 +27,11 @@ func (r ExecRunner) Run(ctx context.Context, dir string, args ...string) ([]byte
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = dir
-	return cmd.CombinedOutput()
+	out, err := cmd.CombinedOutput()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return out, ctxErr
+	}
+	return out, err
 }
 
 type Client struct {
@@ -299,6 +303,12 @@ func (c *Client) runner() Runner {
 func parseCommandError(raw []byte, runErr error) error {
 	if errors.Is(runErr, exec.ErrNotFound) || errors.Is(runErr, os.ErrNotExist) {
 		return fmt.Errorf("GitButler CLI not found: %v: %w", runErr, ErrCLINotFound)
+	}
+	if errors.Is(runErr, context.DeadlineExceeded) {
+		return fmt.Errorf("GitButler command timed out; press r to retry")
+	}
+	if strings.Contains(strings.ToLower(runErr.Error()), "signal: killed") {
+		return fmt.Errorf("GitButler command was killed; press r to retry")
 	}
 	if cliErr, ok := parseCLIError(raw); ok {
 		return cliErr

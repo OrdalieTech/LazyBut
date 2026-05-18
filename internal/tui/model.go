@@ -34,10 +34,11 @@ const (
 )
 
 const (
-	uiTickInterval              = 90 * time.Millisecond
-	autoStatusRefreshInterval   = 3 * time.Second
-	autoBranchesRefreshInterval = 30 * time.Second
-	autoRefreshTimeout          = 15 * time.Second
+	uiTickInterval            = 90 * time.Millisecond
+	autoStatusRefreshInterval = 3 * time.Second
+	statusRefreshTimeout      = 90 * time.Second
+	branchListTimeout         = 2 * time.Minute
+	autoRefreshTimeout        = 45 * time.Second
 )
 
 type actionID string
@@ -221,6 +222,12 @@ type autoRefreshMsg struct {
 	err      error
 }
 
+type branchListMsg struct {
+	branches   *gitbutler.BranchList
+	err        error
+	openPicker bool
+}
+
 type mutationMsg struct {
 	status *gitbutler.WorkspaceStatus
 	err    error
@@ -315,7 +322,7 @@ func setupGitButlerConfirmText(err error) string {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.refreshCmd(), tickCmd(), autoRefreshTickCmd(false), autoRefreshTickCmd(true))
+	return tea.Batch(m.refreshCmd(), tickCmd(), autoRefreshTickCmd(false))
 }
 
 func tickCmd() tea.Cmd {
@@ -326,9 +333,6 @@ func tickCmd() tea.Cmd {
 
 func autoRefreshTickCmd(branches bool) tea.Cmd {
 	interval := autoStatusRefreshInterval
-	if branches {
-		interval = autoBranchesRefreshInterval
-	}
 	return tea.Tick(interval, func(t time.Time) tea.Msg {
 		return autoRefreshTickMsg{branches: branches}
 	})
@@ -375,10 +379,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			toastText, kind := m.mutationToast(msg.label, msg.status)
 			m.setToast(toastText, kind)
 			m, previewCmd := m.withPreview()
-			return m, tea.Batch(m.branchListCmd(), previewCmd)
+			return m, previewCmd
 		}
 		if msg.err != nil {
 			m.setToast(msg.err.Error(), toastError)
+		}
+		return m, nil
+	case branchListMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.setToast("branch list: "+msg.err.Error(), toastError)
+			return m, nil
+		}
+		m = m.replaceData(m.data.Status, msg.branches)
+		if msg.openPicker {
+			return m.openBranchPicker()
 		}
 		return m, nil
 	case installGitButlerMsg:
@@ -1551,6 +1566,10 @@ func (m Model) execute(action action, input string) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) openBranchPicker() (tea.Model, tea.Cmd) {
+	if m.data.Branches == nil {
+		m.setToast("loading inactive branches", toastInfo)
+		return m.startLoading(), m.branchListCmd(true)
+	}
 	if len(m.data.BranchOptions) == 0 {
 		m.toast = "no inactive branches to add"
 		return m, nil
@@ -1657,15 +1676,15 @@ func (m Model) selectedContentIDs(kind contentKind) []string {
 
 func (m Model) refreshCmd() tea.Cmd {
 	client := m.client
+	branches := m.data.Branches
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), statusRefreshTimeout)
 		defer cancel()
 		status, err := client.Status(ctx)
 		if err != nil {
 			return loadedMsg{err: err}
 		}
-		branches, err := client.BranchList(ctx)
-		return loadedMsg{status: status, branches: branches, err: err}
+		return loadedMsg{status: status, branches: branches}
 	}
 }
 
@@ -1679,27 +1698,27 @@ func (m Model) installGitButlerCmd() tea.Cmd {
 	}
 }
 
-func (m Model) branchListCmd() tea.Cmd {
+func (m Model) branchListCmd(openPicker bool) tea.Cmd {
 	client := m.client
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), branchListTimeout)
 		defer cancel()
 		branches, err := client.BranchList(ctx)
-		return loadedMsg{status: m.data.Status, branches: branches, err: err}
+		return branchListMsg{branches: branches, err: err, openPicker: openPicker}
 	}
 }
 
 func (m Model) upstreamRefreshCmd() tea.Cmd {
 	client := m.client
+	branches := m.data.Branches
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), statusRefreshTimeout)
 		defer cancel()
 		status, err := client.Status(ctx)
 		if err != nil {
 			return upstreamRefreshMsg{err: err}
 		}
-		branches, err := client.BranchList(ctx)
-		return upstreamRefreshMsg{status: status, branches: branches, err: err}
+		return upstreamRefreshMsg{status: status, branches: branches}
 	}
 }
 
@@ -1714,11 +1733,7 @@ func (m Model) autoRefreshCmd(includeBranches bool) tea.Cmd {
 			return autoRefreshMsg{err: err}
 		}
 
-		var branches *gitbutler.BranchList
-		if includeBranches {
-			branches, err = client.BranchList(ctx)
-		}
-		return autoRefreshMsg{status: status, branches: branches, err: err}
+		return autoRefreshMsg{status: status, err: err}
 	}
 }
 

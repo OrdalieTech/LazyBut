@@ -26,7 +26,7 @@ func SnapshotMode(client *gitbutler.Client, width, height int, overlay string) s
 	model.width = width
 	model.height = height
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), statusRefreshTimeout)
 	defer cancel()
 	status, err := client.Status(ctx)
 	if err != nil {
@@ -35,12 +35,14 @@ func SnapshotMode(client *gitbutler.Client, width, height int, overlay string) s
 		model = model.maybePromptForBootstrap(err)
 		return model.View()
 	}
-	branches, err := client.BranchList(ctx)
-	if err != nil {
-		model.err = err
-		model.loading = false
-		model.data = buildWorkspaceData(status, nil)
-		return model.View()
+	var branches *gitbutler.BranchList
+	if overlay == "branch" {
+		bctx, bcancel := context.WithTimeout(context.Background(), branchListTimeout)
+		defer bcancel()
+		branches, err = client.BranchList(bctx)
+		if err != nil {
+			model.setToast("branch list: "+err.Error(), toastError)
+		}
 	}
 	model.loading = false
 	model.data = buildWorkspaceData(status, branches)
