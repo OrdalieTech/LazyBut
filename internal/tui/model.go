@@ -214,6 +214,11 @@ type loadedMsg struct {
 	err      error
 }
 
+type fastStatusMsg struct {
+	changes []gitbutler.FileChange
+	err     error
+}
+
 type upstreamRefreshMsg struct {
 	status   *gitbutler.WorkspaceStatus
 	branches *gitbutler.BranchList
@@ -362,7 +367,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 	case startupRefreshMsg:
-		return m.startLoading(), m.refreshCmd()
+		return m.startLoading(), m.statusLoadCmd()
+	case fastStatusMsg:
+		if msg.err != nil || m.data.Status != nil {
+			return m, nil
+		}
+		m.data = buildFastWorkspaceData(msg.changes)
+		m.clampCursors()
+		return m.withPreview()
 	case loadedMsg:
 		m.loading = false
 		m.err = msg.err
@@ -424,7 +436,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.err = nil
 		m.setToast("GitButler CLI installed; refreshing", toastSuccess)
-		return m.startLoading(), m.refreshCmd()
+		return m.startLoading(), m.statusLoadCmd()
 	case tickMsg:
 		m.spinnerFrame++
 		// Toast auto-fades after a few seconds.
@@ -719,7 +731,7 @@ func (m Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "v":
 		return m.rangeSelection()
 	case "r", "ctrl+r":
-		return m.startLoading(), m.refreshCmd()
+		return m.startLoading(), m.statusLoadCmd()
 	case "ctrl+u":
 		return m.scrollPreview(-5), nil
 	case "ctrl+d":
@@ -1438,7 +1450,7 @@ func (m Model) execute(action action, input string) (tea.Model, tea.Cmd) {
 	case actionAddBranch:
 		return m.openBranchPicker()
 	case actionRefresh:
-		return m.startLoading(), m.refreshCmd()
+		return m.startLoading(), m.statusLoadCmd()
 	case actionInstallGitButler:
 		return m.startLoading(), m.installGitButlerCmd()
 	case actionSetup:
@@ -1707,6 +1719,23 @@ func (m Model) refreshCmd() tea.Cmd {
 	}
 }
 
+func (m Model) statusLoadCmd() tea.Cmd {
+	return tea.Batch(m.fastStatusCmd(), m.refreshCmd())
+}
+
+func (m Model) fastStatusCmd() tea.Cmd {
+	client := m.client
+	if client == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		changes, err := client.GitChanges(ctx)
+		return fastStatusMsg{changes: changes, err: err}
+	}
+}
+
 func (m Model) installGitButlerCmd() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -1796,7 +1825,9 @@ func (m Model) previewCmdFor(target string) tea.Cmd {
 		defer cancel()
 		var body string
 		var err error
-		if strings.HasPrefix(target, "show:") {
+		if strings.HasPrefix(target, "git:") {
+			body, err = client.GitDiff(ctx, strings.TrimPrefix(target, "git:"))
+		} else if strings.HasPrefix(target, "show:") {
 			body, err = client.Show(ctx, strings.TrimPrefix(target, "show:"))
 		} else {
 			body, err = client.Diff(ctx, target)

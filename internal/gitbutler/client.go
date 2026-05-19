@@ -1,6 +1,7 @@
 package gitbutler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -49,6 +50,32 @@ func (c *Client) Status(ctx context.Context) (*WorkspaceStatus, error) {
 		return nil, err
 	}
 	return &status, nil
+}
+
+func (c *Client) GitChanges(ctx context.Context) ([]FileChange, error) {
+	raw, err := c.runGit(ctx, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	if err != nil {
+		return nil, err
+	}
+	return parseGitChanges(raw), nil
+}
+
+func (c *Client) GitDiff(ctx context.Context, path string) (string, error) {
+	raw, err := c.runGit(ctx, "diff", "--no-ext-diff", "--", path)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(string(raw)) != "" {
+		return string(raw), nil
+	}
+	raw, err = c.runGit(ctx, "diff", "--cached", "--no-ext-diff", "--", path)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(string(raw)) == "" {
+		return "(no git diff yet; GitButler status is still loading)\n", nil
+	}
+	return string(raw), nil
 }
 
 func (c *Client) BranchList(ctx context.Context) (*BranchList, error) {
@@ -278,6 +305,23 @@ func (c *Client) runText(ctx context.Context, args ...string) (string, error) {
 	return string(raw), nil
 }
 
+func (c *Client) runGit(ctx context.Context, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = c.Dir
+	raw, err := cmd.CombinedOutput()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return raw, ctxErr
+	}
+	if err != nil {
+		text := strings.TrimSpace(string(raw))
+		if text == "" {
+			return raw, err
+		}
+		return raw, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, text)
+	}
+	return raw, nil
+}
+
 func (c *Client) mutate(ctx context.Context, args ...string) (*WorkspaceStatus, error) {
 	args = append(append([]string{}, args...), "-j", "--status-after")
 	var wrapped StatusAfter
@@ -318,6 +362,52 @@ func parseCommandError(raw []byte, runErr error) error {
 		return runErr
 	}
 	return fmt.Errorf("%s: %s", runErr, text)
+}
+
+func parseGitChanges(raw []byte) []FileChange {
+	entries := bytes.Split(raw, []byte{0})
+	changes := make([]FileChange, 0, len(entries))
+	for idx := 0; idx < len(entries); idx++ {
+		entry := entries[idx]
+		if len(entry) < 4 {
+			continue
+		}
+		code := string(entry[:2])
+		path := string(entry[3:])
+		if path == "" {
+			continue
+		}
+		if code[0] == 'R' || code[0] == 'C' {
+			idx++ // porcelain -z stores the old path in the next NUL entry.
+		}
+		changes = append(changes, FileChange{
+			CLIID:      "git:" + path,
+			FilePath:   path,
+			ChangeType: StatusText(gitChangeType(code)),
+		})
+	}
+	return changes
+}
+
+func gitChangeType(code string) string {
+	if strings.Contains(code, "U") {
+		return "conflicted"
+	}
+	switch {
+	case code == "??":
+		return "untracked"
+	case strings.ContainsAny(code, "R"):
+		return "renamed"
+	case strings.ContainsAny(code, "C"):
+		return "copied"
+	case strings.ContainsAny(code, "D"):
+		return "deleted"
+	case strings.ContainsAny(code, "A"):
+		return "added"
+	case strings.ContainsAny(code, "M"):
+		return "modified"
+	}
+	return strings.TrimSpace(code)
 }
 
 func parseCLIError(raw []byte) (CLIError, bool) {

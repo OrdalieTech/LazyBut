@@ -52,6 +52,25 @@ func TestBuildWorkspaceData(t *testing.T) {
 	}
 }
 
+func TestBuildFastWorkspaceData(t *testing.T) {
+	data := buildFastWorkspaceData([]gitbutler.FileChange{{
+		CLIID:      "git:main.go",
+		FilePath:   "main.go",
+		ChangeType: "modified",
+	}})
+
+	if data.Status != nil || !data.Fast {
+		t.Fatalf("fast data should not pretend GitButler status is loaded: %#v", data)
+	}
+	if len(data.Lanes) != 1 || data.Lanes[0].ChangeCount != 1 {
+		t.Fatalf("fast lane not built: %#v", data.Lanes)
+	}
+	items := data.ContentFor(0)
+	if len(items) != 1 || items[0].ID != "git:main.go" || items[0].Label != "main.go" {
+		t.Fatalf("fast content not built: %#v", items)
+	}
+}
+
 func TestContentForAppliedBranch(t *testing.T) {
 	data := buildWorkspaceData(loadFixtureStatus(t), loadFixtureBranches(t))
 	items := data.ContentFor(1)

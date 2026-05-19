@@ -61,6 +61,8 @@ type contentItem struct {
 type workspaceData struct {
 	Status        *gitbutler.WorkspaceStatus
 	Branches      *gitbutler.BranchList
+	Fast          bool
+	FastChanges   []gitbutler.FileChange
 	Lanes         []lane
 	BranchOptions []branchOption
 }
@@ -119,6 +121,21 @@ func buildWorkspaceData(status *gitbutler.WorkspaceStatus, branches *gitbutler.B
 	return data
 }
 
+func buildFastWorkspaceData(changes []gitbutler.FileChange) workspaceData {
+	return workspaceData{
+		Fast:        true,
+		FastChanges: changes,
+		Lanes: []lane{{
+			Key:         "zz",
+			ID:          "zz",
+			Name:        "local changes (git)",
+			Kind:        laneUnassigned,
+			Applied:     true,
+			ChangeCount: len(changes),
+		}},
+	}
+}
+
 func buildBranchOptions(branches *gitbutler.BranchList, applied map[string]bool) []branchOption {
 	if branches == nil {
 		return nil
@@ -144,10 +161,19 @@ func buildBranchOptions(branches *gitbutler.BranchList, applied map[string]bool)
 }
 
 func (d workspaceData) ContentFor(index int) []contentItem {
-	if len(d.Lanes) == 0 || index < 0 || index >= len(d.Lanes) || d.Status == nil {
+	if len(d.Lanes) == 0 || index < 0 || index >= len(d.Lanes) {
 		return nil
 	}
 	selected := d.Lanes[index]
+	if d.Status == nil && d.Fast && selected.Kind == laneUnassigned {
+		if len(d.FastChanges) == 0 {
+			return []contentItem{{Kind: contentSummary, Label: "no file changes from git", Detail: "loading GitButler workspace..."}}
+		}
+		return changesToContent(d.FastChanges)
+	}
+	if d.Status == nil {
+		return nil
+	}
 	switch selected.Kind {
 	case laneUnassigned:
 		return changesToContent(d.Status.UnassignedChanges)

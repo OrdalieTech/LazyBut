@@ -14,6 +14,9 @@ func (m Model) availableActions() []action {
 		actions := []action{
 			{ID: actionRefresh, Key: "r", Aliases: []string{"ctrl+r"}, Label: "refresh"},
 		}
+		if m.err == nil {
+			return actions
+		}
 		if gitbutler.IsCLINotFound(m.err) {
 			return append(actions, action{
 				ID:          actionInstallGitButler,

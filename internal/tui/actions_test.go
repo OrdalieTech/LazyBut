@@ -104,6 +104,7 @@ func TestLaneMoveClearsSelection(t *testing.T) {
 
 func TestSetupActionsAvailableWithoutStatus(t *testing.T) {
 	model := newModel(gitbutler.NewClient(".", nil))
+	model.err = gitbutler.CLIError{Code: "setup_required", Message: "setup required"}
 
 	seen := map[actionID]bool{}
 	for _, action := range model.availableActions() {
@@ -758,6 +759,12 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 				t.Fatalf("expected command for %s, next=%#v", tc.id, next)
 			}
 			msg := cmd()
+			if batch, ok := msg.(tea.BatchMsg); ok && tc.id == actionRefresh {
+				if len(batch) != 2 {
+					t.Fatalf("refresh batch length = %d, want 2", len(batch))
+				}
+				msg = batch[1]()
+			}
 			switch msg.(type) {
 			case loadedMsg, mutationMsg, textMsg:
 			default:
@@ -848,15 +855,40 @@ func TestStartupRefreshMsgStartsInitialStatusLoad(t *testing.T) {
 	if !next.loading || cmd == nil {
 		t.Fatalf("startup refresh should start loading, loading=%v cmd nil=%v", next.loading, cmd == nil)
 	}
-	msg, ok := cmd().(loadedMsg)
-	if !ok {
-		t.Fatalf("message = %T, want loadedMsg", msg)
+	msg, ok := cmd().(tea.BatchMsg)
+	if !ok || len(msg) != 2 {
+		t.Fatalf("message = %T/%d, want two startup commands", msg, len(msg))
 	}
-	if msg.err != nil || msg.status == nil {
-		t.Fatalf("startup refresh failed: status nil=%v err=%v", msg.status == nil, msg.err)
+	full, ok := msg[1]().(loadedMsg)
+	if !ok {
+		t.Fatalf("second command message = %T, want loadedMsg", full)
+	}
+	if full.err != nil || full.status == nil {
+		t.Fatalf("startup refresh failed: status nil=%v err=%v", full.status == nil, full.err)
 	}
 	if got := strings.Join(runner.calls[0], " "); got != "status -j" {
 		t.Fatalf("command = %q, want status -j", got)
+	}
+}
+
+func TestFastStatusMsgDisplaysGitChangesWithoutSetupActions(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+
+	nextModel, _ := model.Update(fastStatusMsg{changes: []gitbutler.FileChange{{
+		CLIID:      "git:main.go",
+		FilePath:   "main.go",
+		ChangeType: "modified",
+	}}})
+	next := nextModel.(Model)
+	if next.data.Status != nil || !next.data.Fast {
+		t.Fatalf("fast status should stay preliminary: %#v", next.data)
+	}
+	if items := next.contents(); len(items) != 1 || items[0].Label != "main.go" {
+		t.Fatalf("fast changes not visible: %#v", items)
+	}
+	actions := actionIDs(next.availableActions())
+	if actions[actionSetup] || actions[actionStage] {
+		t.Fatalf("fast status should not expose GitButler mutations: %#v", actions)
 	}
 }
 

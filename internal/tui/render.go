@@ -423,7 +423,7 @@ func renderItemRow(item contentItem, isSelected, isCursor bool, width int) strin
 	if item.Conflicted {
 		glyph = glyphConflict
 	}
-	id := item.ID
+	id := displayItemID(item)
 	if id == "" {
 		id = "-"
 	}
@@ -496,6 +496,13 @@ func styleGlyph(line, glyph string, kind contentKind, detail string) string {
 	return line[:idx] + style.Render(glyph) + line[idx+len(glyph):]
 }
 
+func displayItemID(item contentItem) string {
+	if strings.HasPrefix(item.ID, "git:") {
+		return "git"
+	}
+	return item.ID
+}
+
 // changeTypeColor maps a git change-type string (added/modified/deleted/…)
 // to the canonical git-status color. Returns an empty Color sentinel for
 // unknown types so callers can fall back to a neutral style.
@@ -511,6 +518,8 @@ func changeTypeColor(detail string) lipgloss.Color {
 		return colAccent2
 	case "untracked", "u":
 		return colMagenta
+	case "conflicted", "conflict":
+		return colErr
 	}
 	return ""
 }
@@ -1003,7 +1012,7 @@ func isPreviewDuplicateFileHeader(line string) bool {
 func previewFileHeader(item contentItem, width int) []string {
 	glyphStyle := fileChangeStyle(item.Detail)
 	idStyle := fileIDStyle(item.Detail)
-	parts := []string{glyphStyle.Render(glyphFile), idStyle.Render(item.ID)}
+	parts := []string{glyphStyle.Render(glyphFile), idStyle.Render(displayItemID(item))}
 	if t := strings.ToLower(item.Detail); t != "" {
 		parts = append(parts, styleDim.Render(t))
 	}

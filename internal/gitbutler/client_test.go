@@ -41,6 +41,21 @@ func TestClientStatusUsesJSON(t *testing.T) {
 	}
 }
 
+func TestParseGitChanges(t *testing.T) {
+	raw := []byte(" M internal/tui/model.go\x00?? scratch.txt\x00R  new.go\x00old.go\x00UU conflicted.go\x00")
+	changes := parseGitChanges(raw)
+
+	want := []FileChange{
+		{CLIID: "git:internal/tui/model.go", FilePath: "internal/tui/model.go", ChangeType: "modified"},
+		{CLIID: "git:scratch.txt", FilePath: "scratch.txt", ChangeType: "untracked"},
+		{CLIID: "git:new.go", FilePath: "new.go", ChangeType: "renamed"},
+		{CLIID: "git:conflicted.go", FilePath: "conflicted.go", ChangeType: "conflicted"},
+	}
+	if !reflect.DeepEqual(changes, want) {
+		t.Fatalf("changes = %#v, want %#v", changes, want)
+	}
+}
+
 func TestClientMutationUsesStatusAfter(t *testing.T) {
 	statusRaw, err := os.ReadFile("testdata/status.json")
 	if err != nil {
