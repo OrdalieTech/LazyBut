@@ -14,6 +14,7 @@ import (
 func main() {
 	dir := flag.String("C", ".", "run as if lazybut started in this directory")
 	bin := flag.String("but-bin", "but", "GitButler CLI binary")
+	noAutoRefresh := flag.Bool("no-auto-refresh", false, "disable background GitButler status refresh")
 	snapshot := flag.String("snapshot", "", "render one non-interactive frame, formatted as WIDTHxHEIGHT")
 	overlay := flag.String("snapshot-overlay", "", "overlay to render in snapshot mode: help, confirm, prompt, palette, branch")
 	flag.Parse()
@@ -29,7 +30,7 @@ func main() {
 		fmt.Print(view)
 		return
 	}
-	if err := tui.Run(client); err != nil {
+	if err := tui.Run(client, !*noAutoRefresh); err != nil {
 		fmt.Fprintf(os.Stderr, "lazybut: %v\n", err)
 		os.Exit(1)
 	}

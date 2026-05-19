@@ -833,6 +833,33 @@ func TestUpdateFromUpstreamRefreshesBeforeSayingNoUpdate(t *testing.T) {
 	}
 }
 
+func TestStartupRefreshMsgStartsInitialStatusLoad(t *testing.T) {
+	statusRaw, err := json.Marshal(loadFixtureStatus(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &actionRunner{outputs: map[string][]byte{
+		"status -j": statusRaw,
+	}}
+	model := newModel(gitbutler.NewClient(".", runner))
+
+	nextModel, cmd := model.Update(startupRefreshMsg{})
+	next := nextModel.(Model)
+	if !next.loading || cmd == nil {
+		t.Fatalf("startup refresh should start loading, loading=%v cmd nil=%v", next.loading, cmd == nil)
+	}
+	msg, ok := cmd().(loadedMsg)
+	if !ok {
+		t.Fatalf("message = %T, want loadedMsg", msg)
+	}
+	if msg.err != nil || msg.status == nil {
+		t.Fatalf("startup refresh failed: status nil=%v err=%v", msg.status == nil, msg.err)
+	}
+	if got := strings.Join(runner.calls[0], " "); got != "status -j" {
+		t.Fatalf("command = %q, want status -j", got)
+	}
+}
+
 func actionIDs(actions []action) map[actionID]bool {
 	out := map[actionID]bool{}
 	for _, action := range actions {

@@ -35,6 +35,7 @@ const (
 
 const (
 	uiTickInterval            = 90 * time.Millisecond
+	startupRefreshDelay       = 50 * time.Millisecond
 	autoStatusRefreshInterval = 3 * time.Second
 	statusRefreshTimeout      = 90 * time.Second
 	branchListTimeout         = 2 * time.Minute
@@ -133,6 +134,7 @@ type Model struct {
 	autoRefreshInFlight        bool
 	autoRefreshPending         bool
 	autoRefreshPendingBranches bool
+	autoRefreshEnabled         bool
 
 	prompt        promptState
 	confirm       confirmState
@@ -195,6 +197,8 @@ const (
 
 type tickMsg time.Time
 
+type startupRefreshMsg struct{}
+
 type oplogLoadedMsg struct {
 	entries []gitbutler.OplogEntry
 	err     error
@@ -245,19 +249,22 @@ type installGitButlerMsg struct {
 	err  error
 }
 
-func Run(client *gitbutler.Client) error {
-	_, err := tea.NewProgram(newModel(client), tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
+func Run(client *gitbutler.Client, autoRefresh bool) error {
+	model := newModel(client)
+	model.autoRefreshEnabled = autoRefresh
+	_, err := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
 }
 
 func newModel(client *gitbutler.Client) Model {
 	return Model{
-		client:      client,
-		loading:     true,
-		focus:       panelLanes,
-		mode:        modeNormal,
-		selected:    map[string]bool{},
-		rangeAnchor: -1,
+		client:             client,
+		loading:            true,
+		focus:              panelLanes,
+		mode:               modeNormal,
+		selected:           map[string]bool{},
+		rangeAnchor:        -1,
+		autoRefreshEnabled: true,
 	}
 }
 
@@ -322,7 +329,17 @@ func setupGitButlerConfirmText(err error) string {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.refreshCmd(), tickCmd(), autoRefreshTickCmd(false))
+	cmds := []tea.Cmd{startupRefreshCmd(), tickCmd()}
+	if m.autoRefreshEnabled {
+		cmds = append(cmds, autoRefreshTickCmd(false))
+	}
+	return tea.Batch(cmds...)
+}
+
+func startupRefreshCmd() tea.Cmd {
+	return tea.Tick(startupRefreshDelay, func(time.Time) tea.Msg {
+		return startupRefreshMsg{}
+	})
 }
 
 func tickCmd() tea.Cmd {
@@ -344,6 +361,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
+	case startupRefreshMsg:
+		return m.startLoading(), m.refreshCmd()
 	case loadedMsg:
 		m.loading = false
 		m.err = msg.err
@@ -1897,7 +1916,7 @@ func (m Model) requestAutoRefresh(includeBranches bool) (Model, tea.Cmd) {
 }
 
 func (m Model) canAutoRefresh() bool {
-	return m.client != nil && !m.loading && m.mode == modeNormal && m.data.Status != nil
+	return m.autoRefreshEnabled && m.client != nil && !m.loading && m.mode == modeNormal && m.data.Status != nil
 }
 
 func (m Model) replaceData(status *gitbutler.WorkspaceStatus, branches *gitbutler.BranchList) Model {

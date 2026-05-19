@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -31,6 +32,32 @@ func TestResponsiveRenderModes(t *testing.T) {
 		}
 		if !strings.Contains(view, "preview") {
 			t.Fatalf("width %d: view should expose preview strip\n%s", width, view)
+		}
+	}
+}
+
+func TestInitialLoadingStateDoesNotLookEmpty(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	model.loading = true
+
+	lines := strings.Join(model.laneLines(100, 10), "\n")
+	if !strings.Contains(lines, "loading GitButler status") {
+		t.Fatalf("initial empty state should explain loading:\n%s", lines)
+	}
+	if strings.Contains(lines, "no branches") {
+		t.Fatalf("initial empty state should not look like an empty workspace:\n%s", lines)
+	}
+}
+
+func TestStatusErrorStateShowsRetry(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	model.loading = false
+	model.err = errors.New("GitButler command timed out")
+
+	lines := strings.Join(model.laneLines(100, 10), "\n")
+	for _, want := range []string{"Could not load GitButler status", "GitButler command timed out", "retry"} {
+		if !strings.Contains(lines, want) {
+			t.Fatalf("status error state missing %q:\n%s", want, lines)
 		}
 	}
 }

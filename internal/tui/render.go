@@ -658,6 +658,12 @@ func (m Model) laneLines(width, height int) []string {
 			}
 			return m.bootstrapLines(width, height)
 		}
+		if m.data.Status == nil && m.loading {
+			return m.loadingLines(width, height)
+		}
+		if m.data.Status == nil && m.err != nil {
+			return m.statusErrorLines(width, height)
+		}
 		return []string{styleDim.Render("no branches")}
 	}
 	rows := make([]string, 0, len(lanes))
@@ -665,6 +671,26 @@ func (m Model) laneLines(width, height int) []string {
 		rows = append(rows, m.formatLaneLine(lane, idx, width))
 	}
 	return windowRows(rows, m.laneCursor, height)
+}
+
+func (m Model) loadingLines(width, height int) []string {
+	return fitStateLines([]string{
+		styleAccent.Render(spinnerFrame(m.spinnerFrame) + " loading GitButler status"),
+		styleDim.Render("LazyBut is open; `but status -j` is running in the background."),
+		styleDim.Render("Huge repositories can take a while; the UI should stay responsive."),
+		"",
+		styleHotKey.Render("q") + " " + styleHotLabel.Render("quit"),
+	}, width, height)
+}
+
+func (m Model) statusErrorLines(width, height int) []string {
+	return fitStateLines([]string{
+		styleErr.Render("Could not load GitButler status"),
+		styleDim.Render(m.err.Error()),
+		"",
+		styleHotKey.Render("r") + " " + styleHotLabel.Render("retry status load"),
+		styleHotKey.Render("q") + " " + styleHotLabel.Render("quit"),
+	}, width, height)
 }
 
 func (m Model) bootstrapLines(width, height int) []string {
@@ -688,6 +714,16 @@ func (m Model) bootstrapLines(width, height int) []string {
 		}
 	}
 	lines = append(lines, "", styleDim.Render("Press : to open all actions, or q to quit."))
+	for idx := range lines {
+		lines[idx] = fit(lines[idx], width)
+	}
+	if len(lines) > height {
+		return lines[:height]
+	}
+	return lines
+}
+
+func fitStateLines(lines []string, width, height int) []string {
 	for idx := range lines {
 		lines[idx] = fit(lines[idx], width)
 	}
