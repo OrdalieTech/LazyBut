@@ -1,0 +1,224 @@
+{
+  "unassignedChanges": [
+    {"cliId": "ab", "filePath": "apps/web/src/components/Toolbar.tsx", "changeType": "modified"},
+    {"cliId": "cd", "filePath": "apps/web/src/components/Toast.tsx", "changeType": "added"},
+    {"cliId": "ef", "filePath": "apps/web/src/legacy/oldHelper.ts", "changeType": "deleted"},
+    {"cliId": "gh", "filePath": "apps/api/internal/cache/eviction.go", "changeType": "modified"},
+    {"cliId": "ij", "filePath": "packages/ui/src/Button.svelte", "changeType": "modified"},
+    {"cliId": "kl", "filePath": "packages/ui/src/Tooltip.svelte", "changeType": "added"},
+    {"cliId": "mn", "filePath": "docs/architecture/overview.md", "changeType": "modified"},
+    {"cliId": "op", "filePath": "scripts/release.sh", "changeType": "modified"},
+    {"cliId": "qr", "filePath": "infra/terraform/staging.tf", "changeType": "modified"},
+    {"cliId": "st", "filePath": ".github/workflows/preview.yml", "changeType": "added"},
+    {"cliId": "uv", "filePath": "Makefile", "changeType": "modified"}
+  ],
+  "stacks": [
+    {
+      "cliId": "s1",
+      "assignedChanges": [
+        {"cliId": "wx", "filePath": "apps/web/src/editor/InlineEditor.tsx", "changeType": "modified"},
+        {"cliId": "yz", "filePath": "apps/web/src/editor/InlineEditor.test.tsx", "changeType": "added"}
+      ],
+      "branches": [
+        {
+          "cliId": "b1",
+          "name": "feat/inline-editor",
+          "branchStatus": "unpushedCommits",
+          "reviewId": "#142",
+          "ci": {
+            "overallConclusion": "success",
+            "pendingCheckTitles": [],
+            "passingCheckTitles": ["unit", "lint", "build", "e2e"],
+            "failingCheckTitles": []
+          },
+          "mergeStatus": "clean",
+          "commits": [
+            {
+              "cliId": "1a",
+              "commitId": "8f1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c",
+              "createdAt": "2026-05-19T11:42:00+02:00",
+              "message": "feat: enable inline edit on hover",
+              "authorName": "Alice Chen",
+              "authorEmail": "alice@stardust.dev",
+              "conflicted": false,
+              "reviewId": "#142"
+            },
+            {
+              "cliId": "1b",
+              "commitId": "7e0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b",
+              "createdAt": "2026-05-19T11:08:00+02:00",
+              "message": "feat: add empty-state placeholder",
+              "authorName": "Alice Chen",
+              "authorEmail": "alice@stardust.dev",
+              "conflicted": false
+            }
+          ],
+          "upstreamCommits": []
+        }
+      ]
+    },
+    {
+      "cliId": "s2",
+      "assignedChanges": [],
+      "branches": [
+        {
+          "cliId": "b2",
+          "name": "fix/cache-eviction-race",
+          "branchStatus": "unpushedCommitsRequiringForce",
+          "reviewId": "#138",
+          "ci": {
+            "overallConclusion": "failure",
+            "pendingCheckTitles": ["preview-deploy"],
+            "passingCheckTitles": ["lint", "build"],
+            "failingCheckTitles": ["unit"]
+          },
+          "mergeStatus": "clean",
+          "commits": [
+            {
+              "cliId": "2a",
+              "commitId": "5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b",
+              "createdAt": "2026-05-19T09:15:00+02:00",
+              "message": "fix: guard cache eviction against concurrent writers",
+              "authorName": "Bo Williams",
+              "authorEmail": "bo@stardust.dev",
+              "conflicted": false,
+              "reviewId": "#138"
+            },
+            {
+              "cliId": "2b",
+              "commitId": "4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e",
+              "createdAt": "2026-05-19T08:50:00+02:00",
+              "message": "test: reproduce race with two writers",
+              "authorName": "Bo Williams",
+              "authorEmail": "bo@stardust.dev",
+              "conflicted": true
+            },
+            {
+              "cliId": "2c",
+              "commitId": "3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d",
+              "createdAt": "2026-05-18T18:30:00+02:00",
+              "message": "refactor: extract eviction policy interface",
+              "authorName": "Bo Williams",
+              "authorEmail": "bo@stardust.dev",
+              "conflicted": false
+            }
+          ],
+          "upstreamCommits": []
+        }
+      ]
+    },
+    {
+      "cliId": "s3",
+      "assignedChanges": [],
+      "branches": [
+        {
+          "cliId": "b3",
+          "name": "feat/event-stream",
+          "branchStatus": "completelyUnpushed",
+          "reviewId": null,
+          "ci": null,
+          "mergeStatus": "clean",
+          "commits": [
+            {
+              "cliId": "3a",
+              "commitId": "1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c",
+              "createdAt": "2026-05-19T13:20:00+02:00",
+              "message": "feat: wire SSE pipe for live events",
+              "authorName": "Casey Lim",
+              "authorEmail": "casey@stardust.dev",
+              "conflicted": false
+            },
+            {
+              "cliId": "3b",
+              "commitId": "0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b",
+              "createdAt": "2026-05-19T13:05:00+02:00",
+              "message": "feat: introduce event bus primitive",
+              "authorName": "Casey Lim",
+              "authorEmail": "casey@stardust.dev",
+              "conflicted": false
+            },
+            {
+              "cliId": "3c",
+              "commitId": "9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b",
+              "createdAt": "2026-05-19T11:55:00+02:00",
+              "message": "chore: scaffold event-stream package",
+              "authorName": "Casey Lim",
+              "authorEmail": "casey@stardust.dev",
+              "conflicted": false
+            }
+          ],
+          "upstreamCommits": []
+        }
+      ]
+    },
+    {
+      "cliId": "s4",
+      "assignedChanges": [],
+      "branches": [
+        {
+          "cliId": "b4",
+          "name": "shipped/auth-rewrite",
+          "branchStatus": "integrated",
+          "reviewId": "#129",
+          "ci": null,
+          "mergeStatus": "clean",
+          "commits": [
+            {
+              "cliId": "4a",
+              "commitId": "deadbeefcafef00d1234567890abcdef12345678",
+              "createdAt": "2026-05-17T17:42:00+02:00",
+              "message": "feat: ship OIDC-based session refresh",
+              "authorName": "Alice Chen",
+              "authorEmail": "alice@stardust.dev",
+              "conflicted": false,
+              "reviewId": "#129"
+            }
+          ],
+          "upstreamCommits": []
+        }
+      ]
+    }
+  ],
+  "mergeBase": {
+    "cliId": "mb",
+    "commitId": "f00d1234567890abcdef1234567890abcdef1234",
+    "createdAt": "2026-05-15T10:00:00+02:00",
+    "message": "chore: bump stardust to v1.4.0",
+    "authorName": "Release Bot",
+    "authorEmail": "release@stardust.dev",
+    "conflicted": null
+  },
+  "upstreamState": {
+    "behind": 2,
+    "lastFetched": "2026-05-19T13:48:00+02:00",
+    "latestCommit": {
+      "cliId": "u1",
+      "commitId": "abc123def456789012345678901234567890abcd",
+      "createdAt": "2026-05-19T13:33:00+02:00",
+      "message": "chore: pin postgres image to 16.3",
+      "authorName": "Release Bot",
+      "authorEmail": "release@stardust.dev",
+      "conflicted": null
+    },
+    "upstreamCommits": [
+      {
+        "cliId": "u1",
+        "commitId": "abc123def456789012345678901234567890abcd",
+        "createdAt": "2026-05-19T13:33:00+02:00",
+        "message": "chore: pin postgres image to 16.3",
+        "authorName": "Release Bot",
+        "authorEmail": "release@stardust.dev",
+        "conflicted": null
+      },
+      {
+        "cliId": "u2",
+        "commitId": "def456abc789012345678901234567890abcd123",
+        "createdAt": "2026-05-19T12:20:00+02:00",
+        "message": "fix: tolerate trailing slash in API base url",
+        "authorName": "Alice Chen",
+        "authorEmail": "alice@stardust.dev",
+        "conflicted": null
+      }
+    ]
+  }
+}
