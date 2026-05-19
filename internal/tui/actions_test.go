@@ -138,6 +138,19 @@ func TestBootstrapPromptForMissingGitButlerCLI(t *testing.T) {
 	}
 }
 
+func TestGenericStatusErrorOnlyOffersRefresh(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	model.err = errors.New("parse status failed")
+
+	seen := actionIDs(model.availableActions())
+	if !seen[actionRefresh] {
+		t.Fatalf("refresh missing: %#v", seen)
+	}
+	if seen[actionSetup] || seen[actionSetupInit] || seen[actionInstallGitButler] {
+		t.Fatalf("bootstrap actions should not show for generic errors: %#v", seen)
+	}
+}
+
 func TestBootstrapPromptForGitButlerSetup(t *testing.T) {
 	model := newModel(gitbutler.NewClient(".", nil))
 	model.width = 120

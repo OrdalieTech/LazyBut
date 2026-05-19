@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -25,6 +26,12 @@ func SnapshotMode(client *gitbutler.Client, width, height int, overlay string) s
 	model := newModel(client)
 	model.width = width
 	model.height = height
+
+	if overlay == "flash" {
+		model.loading = false
+		model.err = fmt.Errorf("parse `but pull` output: malformed JSON at line 32: expected ']' but got '}' near offset 1487 — try running `but pull --check` first or run with --debug to see the raw output")
+		return model.View()
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), statusRefreshTimeout)
 	defer cancel()
@@ -95,6 +102,16 @@ func SnapshotMode(client *gitbutler.Client, width, height int, overlay string) s
 	case "upstream":
 		model.mode = modeConfirm
 		model.confirm = confirmState{Action: action{ID: actionPull, Label: "update from upstream"}}
+	case "branch-focus":
+		// Move focus to the first applied branch so we can verify zz still
+		// reads as distinct when it isn't the active column.
+		for i, l := range model.data.Lanes {
+			if l.Kind == laneAppliedBranch {
+				model.laneCursor = i
+				model, _ = model.withPreview()
+				break
+			}
+		}
 	}
 	return model.View()
 }

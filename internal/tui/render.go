@@ -42,9 +42,18 @@ var (
 	styleTitle     = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
 	styleTitleBlur = lipgloss.NewStyle().Foreground(colMuted).Bold(true)
 
-	styleFocus   = lipgloss.NewStyle().Border(border).BorderForeground(colAccent)
+	// Borders mirror LazyGit's approach: inactive panels and overlays use a
+	// quiet grey that recedes into the background, while the focused panel
+	// gets a calmer soft-cyan tint (not the loud bright cyan that's reserved
+	// for in-text emphasis like keys, titles, and chips).
+	styleFocus   = lipgloss.NewStyle().Border(border).BorderForeground(colAccent2)
 	styleBlur    = lipgloss.NewStyle().Border(border).BorderForeground(colFaint)
-	styleOverlay = lipgloss.NewStyle().Border(border).BorderForeground(colAccent).Padding(1, 2)
+	styleOverlay = lipgloss.NewStyle().Border(border).BorderForeground(colFaint).Padding(1, 2)
+	// The zz (unassigned) column is the source of all uncommitted work and
+	// shouldn't read as "just another branch". A thicker double border with a
+	// warm tint makes its role obvious at a glance.
+	styleZZFocus = lipgloss.NewStyle().Border(lipgloss.DoubleBorder()).BorderForeground(colWarn)
+	styleZZBlur  = lipgloss.NewStyle().Border(lipgloss.DoubleBorder()).BorderForeground(colDeep)
 
 	styleSelectedRow = lipgloss.NewStyle().Background(colSelectBg).Foreground(colFg).Bold(true)
 	styleMarked      = lipgloss.NewStyle().Foreground(colWarn).Bold(true)
@@ -104,9 +113,15 @@ func (m Model) View() string {
 
 	top := m.renderTop()
 	hotbar := m.renderHotbar()
-	bodyHeight := max(1, m.height-lipgloss.Height(top)-lipgloss.Height(hotbar))
+	flash := m.renderFlash(m.width)
+	bodyHeight := max(1, m.height-lipgloss.Height(top)-lipgloss.Height(hotbar)-lipgloss.Height(flash))
 	body := m.renderBody(m.width, bodyHeight)
-	view := lipgloss.JoinVertical(lipgloss.Left, top, body, hotbar)
+	parts := []string{top}
+	if flash != "" {
+		parts = append(parts, flash)
+	}
+	parts = append(parts, body, hotbar)
+	view := lipgloss.JoinVertical(lipgloss.Left, parts...)
 
 	switch m.mode {
 	case modeInput:
@@ -160,14 +175,67 @@ func (m Model) renderTop() string {
 	if m.toast != "" {
 		segs = append(segs, renderToast(m.toast, m.toastKind))
 	}
-	if m.err != nil && m.hasBootstrapIssue() {
-		if !m.isBootstrapPrompt() {
-			segs = append(segs, styleWarn.Render("GitButler setup needed"))
-		}
-	} else if m.err != nil {
-		segs = append(segs, styleErr.Render(glyphCross+" "+m.err.Error()))
+	if m.err != nil && m.hasBootstrapIssue() && !m.isBootstrapPrompt() {
+		segs = append(segs, styleWarn.Render("GitButler setup needed"))
 	}
 	return fit(strings.Join(segs, " "+styleHotSep.Render(sepBullet)+" "), m.width)
+}
+
+// renderFlash returns a full-width error banner (wrapped if needed) shown
+// between the top bar and the body — so long CLI errors aren't truncated into
+// a top-bar segment. Returns "" when there's nothing to display.
+func (m Model) renderFlash(width int) string {
+	if m.err == nil {
+		return ""
+	}
+	// Bootstrap-related errors already get a richer in-body card; don't
+	// duplicate them in the flash.
+	if m.hasBootstrapIssue() {
+		return ""
+	}
+	text := strings.ReplaceAll(m.err.Error(), "\n", " ")
+	lines := wrapPlain(text, max(8, width-2), 3)
+	out := make([]string, 0, len(lines))
+	for i, line := range lines {
+		prefix := "  "
+		if i == 0 {
+			prefix = styleErr.Render(glyphCross+" ") + ""
+		}
+		out = append(out, prefix+styleErr.Render(line))
+	}
+	return strings.Join(out, "\n")
+}
+
+// wrapPlain word-wraps a plain (no-ANSI) string to `width` visible columns,
+// keeping at most maxLines. The last line is ellipsised if the input overflows.
+func wrapPlain(s string, width, maxLines int) []string {
+	if width <= 0 || maxLines <= 0 {
+		return nil
+	}
+	words := strings.Fields(s)
+	lines := []string{}
+	cur := ""
+	for i, w := range words {
+		if cur == "" {
+			cur = w
+			continue
+		}
+		if lipgloss.Width(cur)+1+lipgloss.Width(w) > width {
+			lines = append(lines, cur)
+			cur = w
+			if len(lines) == maxLines-1 {
+				rest := strings.Join(words[i:], " ")
+				lines = append(lines, fit(rest, width))
+				return lines
+			}
+		} else {
+			cur += " " + w
+		}
+	}
+	if cur != "" {
+		lines = append(lines, cur)
+	}
+	return lines
 }
 
 // fetchedAgo returns a human-friendly "fetched 5m ago" string from
@@ -350,6 +418,22 @@ func (m Model) kanbanGeometry(width int) (int, int) {
 	return max(1, columnCount), max(22, columnWidth)
 }
 
+// laneBoxStyle returns the border style appropriate for the lane kind. The zz
+// workspace gets a heavier double border in a warm tint so it reads as the
+// source/staging context rather than just another branch column.
+func laneBoxStyle(lane lane, focused bool) lipgloss.Style {
+	if lane.Kind == laneUnassigned {
+		if focused {
+			return styleZZFocus
+		}
+		return styleZZBlur
+	}
+	if focused {
+		return styleFocus
+	}
+	return styleBlur
+}
+
 func (m Model) renderKanbanColumn(lane lane, index, width, height int) string {
 	innerW := contentWidth(width)
 	rows := []string{
@@ -374,7 +458,8 @@ func (m Model) renderKanbanColumn(lane lane, index, width, height int) string {
 	}
 	title := m.laneKanbanTitle(lane, index)
 	body := strings.Join(windowRows(rows, m.kanbanColumnCursor(index), max(1, contentHeight(height)-1)), "\n")
-	return box(title, body, width, height, index == m.laneCursor)
+	focused := index == m.laneCursor
+	return boxWithStyle(title, body, width, height, laneBoxStyle(lane, focused))
 }
 
 func isFileCommitBoundary(items []contentItem, idx int) bool {
@@ -1826,6 +1911,10 @@ func box(title, body string, width, height int, focused bool) string {
 	if focused {
 		style = styleFocus
 	}
+	return boxWithStyle(title, body, width, height, style)
+}
+
+func boxWithStyle(title, body string, width, height int, style lipgloss.Style) string {
 	innerW := contentWidth(width)
 	innerH := contentHeight(height)
 	header := fit(title, innerW)

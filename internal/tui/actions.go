@@ -25,10 +25,13 @@ func (m Model) availableActions() []action {
 				ConfirmText: installGitButlerConfirmText(),
 			})
 		}
-		return append(actions,
-			action{ID: actionSetup, Key: "g", Label: "setup GitButler", ConfirmText: setupGitButlerConfirmText(m.err)},
-			action{ID: actionSetupInit, Key: "G", Label: "init and setup GitButler", Dangerous: true, ConfirmText: "Run `but setup --init` here?"},
-		)
+		if gitbutler.IsSetupRequired(m.err) {
+			return append(actions,
+				action{ID: actionSetup, Key: "g", Label: "setup GitButler", ConfirmText: setupGitButlerConfirmText(m.err)},
+				action{ID: actionSetupInit, Key: "G", Label: "init and setup GitButler", Dangerous: true, ConfirmText: "Run `but setup --init` here?"},
+			)
+		}
+		return actions
 	}
 
 	actions := []action{
