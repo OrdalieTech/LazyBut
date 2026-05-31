@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -31,6 +32,14 @@ func SnapshotMode(client *gitbutler.Client, width, height int, overlay string) s
 		model.loading = false
 		model.err = fmt.Errorf("parse `but pull` output: malformed JSON at line 32: expected ']' but got '}' near offset 1487 — try running `but pull --check` first or run with --debug to see the raw output")
 		return model.View()
+	}
+
+	if overlay == "demo" || strings.HasPrefix(overlay, "demo-") {
+		sub := ""
+		if overlay != "demo" {
+			sub = strings.TrimPrefix(overlay, "demo-")
+		}
+		return renderDemoSnapshot(width, height, sub)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), statusRefreshTimeout)
