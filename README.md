@@ -4,6 +4,8 @@
 It aims to bring the speed, keyboard-first ergonomics, and always-visible context of
 LazyGit to GitButler's workspace model.
 
+![LazyBut terminal screenshot](docs/screenshots/hero.png)
+
 GitButler is excellent at organizing work into virtual branches and stacks. LazyBut is
 the terminal companion: it keeps `zz` unassigned changes, active branch stacks, commits,
 file or hunk IDs, previews, push state, upstream state, and PR-oriented actions visible
