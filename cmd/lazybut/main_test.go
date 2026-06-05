@@ -19,3 +19,28 @@ func TestParseSizeRejectsInvalidInput(t *testing.T) {
 		}
 	}
 }
+
+func TestSelfUpdateCommandUsesInstallDirAndRef(t *testing.T) {
+	cmd, installDir, err := selfUpdateCommand("v0.1.8", "/tmp/bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCmd := []string{"go", "install", "github.com/OrdalieTech/LazyBut/cmd/lazybut@v0.1.8"}
+	if len(cmd) != len(wantCmd) {
+		t.Fatalf("cmd length = %d, want %d", len(cmd), len(wantCmd))
+	}
+	for i := range cmd {
+		if cmd[i] != wantCmd[i] {
+			t.Fatalf("cmd[%d] = %q, want %q", i, cmd[i], wantCmd[i])
+		}
+	}
+	if installDir != "/tmp/bin" {
+		t.Fatalf("installDir = %q", installDir)
+	}
+}
+
+func TestSelfUpdateCommandRejectsEmptyRef(t *testing.T) {
+	if _, _, err := selfUpdateCommand(" ", "/tmp/bin"); err == nil {
+		t.Fatal("expected empty ref to fail")
+	}
+}

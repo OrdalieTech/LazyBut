@@ -61,6 +61,18 @@ Go install also works:
 go install github.com/OrdalieTech/LazyBut/cmd/lazybut@latest
 ```
 
+Update an existing install from the repository:
+
+```sh
+lazybut update
+lazybut update -ref latest
+lazybut update -ref v0.1.8
+```
+
+`lazybut update` installs `github.com/OrdalieTech/LazyBut/cmd/lazybut@main`
+into the directory that contains the current `lazybut` binary. It requires Go.
+Use `-ref latest` to follow the latest tagged module release instead.
+
 ## Run
 
 ```sh
