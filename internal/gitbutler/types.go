@@ -3,6 +3,7 @@ package gitbutler
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
@@ -120,6 +121,41 @@ type StatusAfter struct {
 	Result      json.RawMessage  `json:"result"`
 	Status      *WorkspaceStatus `json:"status"`
 	StatusError *CLIError        `json:"status_error"`
+}
+
+func (s *StatusAfter) UnmarshalJSON(raw []byte) error {
+	var decoded struct {
+		Result      json.RawMessage `json:"result"`
+		Status      json.RawMessage `json:"status"`
+		StatusError *CLIError       `json:"status_error"`
+	}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return err
+	}
+	s.Result = decoded.Result
+	s.Status = nil
+	s.StatusError = decoded.StatusError
+
+	statusRaw := bytes.TrimSpace(decoded.Status)
+	if len(statusRaw) == 0 || bytes.Equal(statusRaw, []byte("null")) {
+		return nil
+	}
+	if statusRaw[0] == '"' {
+		var text string
+		if err := json.Unmarshal(statusRaw, &text); err != nil {
+			return fmt.Errorf("parse status string: %w", err)
+		}
+		return nil
+	}
+	if statusRaw[0] != '{' {
+		return fmt.Errorf("status field has unsupported JSON value")
+	}
+	var status WorkspaceStatus
+	if err := json.Unmarshal(statusRaw, &status); err != nil {
+		return fmt.Errorf("parse structured status: %w", err)
+	}
+	s.Status = &status
+	return nil
 }
 
 type CLIError struct {

@@ -77,6 +77,52 @@ func TestClientMutationUsesStatusAfter(t *testing.T) {
 	}
 }
 
+func TestClientMutationAcceptsStringStatusAfter(t *testing.T) {
+	statusRaw, err := os.ReadFile("testdata/status.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"pull -j --status-after": []byte(`{"result":{},"status":"updated"}`),
+		"status -j":              statusRaw,
+	}}
+	client := NewClient(".", runner)
+
+	status, err := client.Pull(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Stacks[0].Branches[0].Name != "feature/ui" {
+		t.Fatalf("unexpected status: %#v", status.Stacks)
+	}
+	want := [][]string{
+		{"pull", "-j", "--status-after"},
+		{"status", "-j"},
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
+func TestClientMutationRejectsMalformedStructuredStatusAfter(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"pull -j --status-after": []byte(`{"result":{},"status":{"stacks":"bad"}}`),
+		"status -j":              []byte(`{}`),
+	}}
+	client := NewClient(".", runner)
+
+	_, err := client.Pull(context.Background())
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+	if !strings.Contains(err.Error(), "parse `but pull -j --status-after`") {
+		t.Fatalf("error = %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("calls = %#v, want no fallback status call", runner.calls)
+	}
+}
+
 func TestClientStageManyRunsSequentialStages(t *testing.T) {
 	statusRaw, err := os.ReadFile("testdata/status.json")
 	if err != nil {

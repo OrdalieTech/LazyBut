@@ -2,7 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORK_ROOT="$(mktemp -d /private/tmp/lazybut-e2e.XXXXXX)"
+TMP_BASE="${TMPDIR:-/tmp}"
+TMP_BASE="${TMP_BASE%/}"
+WORK_ROOT="$(mktemp -d "$TMP_BASE/lazybut-e2e.XXXXXX")"
 REMOTE="$WORK_ROOT/remote.git"
 REPO="$WORK_ROOT/repo"
 CLONE="$WORK_ROOT/clone"
@@ -54,7 +56,7 @@ status_json() {
 }
 
 log "build lazybut"
-run env GOCACHE=/private/tmp/lazybutler-gocache go -C "$ROOT" build -o "$BIN" ./cmd/lazybut
+run env GOCACHE="$TMP_BASE/lazybutler-gocache" go -C "$ROOT" build -o "$BIN" ./cmd/lazybut
 
 log "create empty git repo with bare remote"
 run git init --bare "$REMOTE"
@@ -141,7 +143,7 @@ run_retry but -C "$MERGE_REPO" merge e2e-merge --status-after -j >/dev/null
 run_retry but -C "$MERGE_REPO" status -j >/dev/null
 
 log "error surfaces"
-if "$BIN" --but-bin /private/tmp/missing-but -C "$REPO" -snapshot 80x20 | grep -q "GitButler CLI not found"; then
+if "$BIN" --but-bin "$TMP_BASE/missing-but" -C "$REPO" -snapshot 80x20 | grep -q "install GitButler CLI"; then
   printf '+ missing but error surfaced\n'
 else
   printf 'missing but error was not surfaced\n' >&2
