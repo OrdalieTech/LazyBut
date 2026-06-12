@@ -173,7 +173,7 @@ func TestClientMutationCommandSurface(t *testing.T) {
 			_, err := c.NewBranch(ctx, "child", "feature/ui")
 			return err
 		}},
-		{"delete branch", "branch delete feature/ui -j --status-after", func(ctx context.Context, c *Client) error {
+		{"delete branch", "branch delete feature/ui --force -j --status-after", func(ctx context.Context, c *Client) error {
 			_, err := c.DeleteBranch(ctx, "feature/ui")
 			return err
 		}},
@@ -263,10 +263,10 @@ func TestClientTextCommandSurface(t *testing.T) {
 		{"show", "show feature/ui", func(ctx context.Context, c *Client) (string, error) {
 			return c.Show(ctx, "feature/ui")
 		}},
-		{"diff all", "diff", func(ctx context.Context, c *Client) (string, error) {
+		{"diff all", "diff --no-tui", func(ctx context.Context, c *Client) (string, error) {
 			return c.Diff(ctx, "")
 		}},
-		{"diff target", "diff a1", func(ctx context.Context, c *Client) (string, error) {
+		{"diff target", "diff a1 --no-tui", func(ctx context.Context, c *Client) (string, error) {
 			return c.Diff(ctx, "a1")
 		}},
 		{"pull check", "pull --check", func(ctx context.Context, c *Client) (string, error) {

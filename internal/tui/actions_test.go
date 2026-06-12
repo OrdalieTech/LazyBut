@@ -522,9 +522,9 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 			id:         actionDelete,
 			laneCursor: 1,
 			outputs: map[string][]byte{
-				"branch delete feature/ui -j --status-after": wrapped,
+				"branch delete feature/ui --force -j --status-after": wrapped,
 			},
-			want: [][]string{{"branch", "delete", "feature/ui", "-j", "--status-after"}},
+			want: [][]string{{"branch", "delete", "feature/ui", "--force", "-j", "--status-after"}},
 		},
 		{
 			name:          "discard change",

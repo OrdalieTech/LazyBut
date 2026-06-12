@@ -17,6 +17,17 @@ func init() {
 	lipgloss.SetColorProfile(termenv.ANSI256)
 }
 
+// ansiPrefix returns the leading SGR escape a style emits (everything up to and
+// including the first "m"), so tests can assert "this fragment is styled with
+// style X" without hard-coding palette color codes.
+func ansiPrefix(style lipgloss.Style) string {
+	rendered := style.Render("x")
+	if i := strings.Index(rendered, "m"); i >= 0 {
+		return rendered[:i+1]
+	}
+	return rendered
+}
+
 func TestResponsiveRenderModes(t *testing.T) {
 	base := newModel(gitbutler.NewClient(".", nil))
 	base.data = buildWorkspaceData(loadFixtureStatus(t), loadFixtureBranches(t))
@@ -439,10 +450,12 @@ func TestDiffLineClassification(t *testing.T) {
 		line string
 		want []string // ANSI fragments that must appear (color codes)
 	}{
-		{"added", "      22│+	orchestratorV4 \"foo\"", []string{"\x1b[38;5;114m"}},
-		{"removed", "      22│-	old line", []string{"\x1b[38;5;203m"}},
-		{"context", "   19 19│ 	keep line", []string{"\x1b[38;5;243m"}}, // gutter is dim
-		{"header", "x9 apps/api/main.go│", []string{"\x1b[1;38;5;81m"}}, // header is bold accent
+		// Expected fragments are derived from the styles themselves so palette
+		// tweaks don't require hand-editing color codes here.
+		{"added", "      22│+	orchestratorV4 \"foo\"", []string{ansiPrefix(styleDiffAdd)}},
+		{"removed", "      22│-	old line", []string{ansiPrefix(styleDiffRem)}},
+		{"context", "   19 19│ 	keep line", []string{ansiPrefix(styleDiffGutter)}}, // gutter is dim
+		{"header", "x9 apps/api/main.go│", []string{ansiPrefix(styleDiffHeader)}},  // header is bold accent
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

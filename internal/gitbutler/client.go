@@ -99,10 +99,14 @@ func (c *Client) Show(ctx context.Context, target string) (string, error) {
 }
 
 func (c *Client) Diff(ctx context.Context, target string) (string, error) {
+	// --no-tui is essential: `but diff` can launch an interactive TUI diff
+	// viewer when `but.ui.tui` is configured on, which would hijack the terminal
+	// out from under LazyBut. We only ever want the plain text diff for the
+	// preview pane.
 	if target == "" {
-		return c.runText(ctx, "diff")
+		return c.runText(ctx, "diff", "--no-tui")
 	}
-	return c.runText(ctx, "diff", target)
+	return c.runText(ctx, "diff", target, "--no-tui")
 }
 
 func (c *Client) Stage(ctx context.Context, changeID, branch string) (*WorkspaceStatus, error) {
@@ -149,7 +153,13 @@ func (c *Client) NewBranch(ctx context.Context, name string, anchor string) (*Wo
 }
 
 func (c *Client) DeleteBranch(ctx context.Context, branch string) (*WorkspaceStatus, error) {
-	return c.mutate(ctx, "branch", "delete", branch)
+	// `but branch delete` prompts for confirmation when the branch has unpushed
+	// commits. LazyBut runs non-interactively (stdin is /dev/null), where `but`
+	// refuses to prompt and the command fails — and the user has *already*
+	// confirmed via LazyBut's own Dangerous dialog. --force skips only that
+	// prompt; it does not bypass GitButler's structural safety checks (e.g. it
+	// still refuses to leave an anonymous segment).
+	return c.mutate(ctx, "branch", "delete", branch, "--force")
 }
 
 func (c *Client) Reword(ctx context.Context, target, message string) (*WorkspaceStatus, error) {

@@ -135,6 +135,10 @@ type Model struct {
 	autoRefreshPending         bool
 	autoRefreshPendingBranches bool
 	autoRefreshEnabled         bool
+	// spinnerFrame at which the current background sync began, so the activity
+	// indicator can stay hidden for quick refreshes (which complete in well
+	// under syncIndicatorDelay) and only surface for genuinely slow ones.
+	autoRefreshStartFrame int
 
 	prompt        promptState
 	confirm       confirmState
@@ -738,7 +742,10 @@ func (m Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.scrollPreview(5), nil
 	}
 
-	if m.usesKanbanLayout() {
+	// Whenever there are lanes, h/l move between branches and j/k move within the
+	// active branch — identical in the wide kanban and the narrow tabbed view, so
+	// the navigation muscle memory carries across terminal sizes.
+	if len(m.filteredLanes()) > 0 {
 		switch key.String() {
 		case "tab", "l", "right", "enter":
 			return m.moveLane(1)
@@ -1943,6 +1950,7 @@ func (m Model) requestAutoRefresh(includeBranches bool) (Model, tea.Cmd) {
 		return m, nil
 	}
 	m.autoRefreshInFlight = true
+	m.autoRefreshStartFrame = m.spinnerFrame
 	return m, m.autoRefreshCmd(includeBranches)
 }
 

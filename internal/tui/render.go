@@ -19,17 +19,25 @@ var (
 
 	// Git-inspired palette: green = added/synced, red = removed/force/conflict,
 	// yellow = modified/ahead/warn, cyan = info/accent, purple = merged/integrated.
-	colAccent   = lipgloss.Color("81")  // bright cyan
-	colAccent2  = lipgloss.Color("117") // soft cyan
-	colMuted    = lipgloss.Color("245")
-	colFaint    = lipgloss.Color("243") // border of non-focused boxes
-	colDeep     = lipgloss.Color("238") // very dim separators
-	colOk       = lipgloss.Color("114") // git green (added)
-	colWarn     = lipgloss.Color("222") // git yellow (modified)
-	colErr      = lipgloss.Color("203") // git red (removed / force / conflict)
-	colPurple   = lipgloss.Color("141") // merged / integrated
-	colMagenta  = lipgloss.Color("177") // untracked / renamed
-	colSelectBg = lipgloss.Color("237")
+	//
+	// Values are mid-saturation 256-colors picked to keep adequate contrast on
+	// BOTH dark and light terminals — pale tints (high-number greys, light
+	// yellows) vanish on white backgrounds, so they're avoided for anything
+	// load-bearing.
+	colAccent   = lipgloss.Color("38") // teal-cyan — primary accent / titles
+	colAccent2  = lipgloss.Color("31") // deeper teal — focused border
+	colMuted    = lipgloss.Color("244")
+	colFaint    = lipgloss.Color("240") // border of non-focused boxes (recedes)
+	colDeep     = lipgloss.Color("237") // very dim separators
+	colOk       = lipgloss.Color("71")  // git green (added)
+	colWarn     = lipgloss.Color("178") // git amber (modified/ahead) — readable on white
+	colErr      = lipgloss.Color("167") // git red (removed / force / conflict)
+	colPurple   = lipgloss.Color("99")  // merged / integrated
+	colMagenta  = lipgloss.Color("169") // untracked / renamed
+	colLoad     = lipgloss.Color("208") // loading / working — vivid amber, pops on light + dark
+	colSelectBg = lipgloss.Color("24")  // focused selection bar (blue)
+	colSelectFg = lipgloss.Color("231") // text on the focused selection bar
+	colBlurBg   = lipgloss.Color("238") // unfocused panel's cursor row (subtle)
 	colFg       = lipgloss.Color("252")
 
 	styleDim    = lipgloss.NewStyle().Foreground(colMuted)
@@ -38,25 +46,33 @@ var (
 	styleWarn   = lipgloss.NewStyle().Foreground(colWarn).Bold(true)
 	styleErr    = lipgloss.NewStyle().Foreground(colErr).Bold(true)
 	styleOk     = lipgloss.NewStyle().Foreground(colOk).Bold(true)
+	// styleLoad is the single source of truth for "something is happening" —
+	// a vivid amber that stays visible on light and dark backgrounds. Every
+	// spinner/refresh/loading affordance routes through it.
+	styleLoad = lipgloss.NewStyle().Foreground(colLoad).Bold(true)
 
 	styleTitle     = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
-	styleTitleBlur = lipgloss.NewStyle().Foreground(colMuted).Bold(true)
+	styleTitleBlur = lipgloss.NewStyle().Foreground(colMuted)
 
-	// Borders mirror LazyGit's approach: inactive panels and overlays use a
-	// quiet grey that recedes into the background, while the focused panel
-	// gets a calmer soft-cyan tint (not the loud bright cyan that's reserved
-	// for in-text emphasis like keys, titles, and chips).
+	// Borders mirror LazyGit's approach: inactive panels recede into a quiet
+	// grey, while the focused panel gets a calmer teal tint (not the brighter
+	// accent that's reserved for in-text emphasis like keys, titles, and chips).
 	styleFocus   = lipgloss.NewStyle().Border(border).BorderForeground(colAccent2)
 	styleBlur    = lipgloss.NewStyle().Border(border).BorderForeground(colFaint)
-	styleOverlay = lipgloss.NewStyle().Border(border).BorderForeground(colFaint).Padding(1, 2)
+	styleOverlay = lipgloss.NewStyle().Border(border).BorderForeground(colAccent2).Padding(1, 2)
 	// The zz (unassigned) column is the source of all uncommitted work and
-	// shouldn't read as "just another branch". A thicker double border with a
-	// warm tint makes its role obvious at a glance.
-	styleZZFocus = lipgloss.NewStyle().Border(lipgloss.DoubleBorder()).BorderForeground(colWarn)
-	styleZZBlur  = lipgloss.NewStyle().Border(lipgloss.DoubleBorder()).BorderForeground(colDeep)
+	// shouldn't read as "just another branch". Rather than a heavier border
+	// (which adds visual weight and noise), it's set apart purely by a warm
+	// amber tint plus its "zz" badge — keeping every column the same tidy weight.
+	styleZZFocus = lipgloss.NewStyle().Border(border).BorderForeground(colWarn)
+	styleZZBlur  = lipgloss.NewStyle().Border(border).BorderForeground(colDeep)
 
-	styleSelectedRow = lipgloss.NewStyle().Background(colSelectBg).Foreground(colFg).Bold(true)
-	styleMarked      = lipgloss.NewStyle().Foreground(colWarn).Bold(true)
+	// Selection is focus-aware: the active panel's cursor row gets a solid blue
+	// bar (LazyGit-style), while other panels show their cursor as a muted grey
+	// band — so "where am I" is unambiguous across the kanban columns.
+	styleSelectedRow     = lipgloss.NewStyle().Background(colSelectBg).Foreground(colSelectFg).Bold(true)
+	styleSelectedRowBlur = lipgloss.NewStyle().Background(colBlurBg).Foreground(colFg)
+	styleMarked          = lipgloss.NewStyle().Foreground(colWarn).Bold(true)
 
 	styleBadgeZZ       = lipgloss.NewStyle().Foreground(colWarn).Bold(true)
 	styleBadgeOn       = lipgloss.NewStyle().Foreground(colOk).Bold(true)
@@ -104,7 +120,51 @@ const (
 	glyphMerged    = "⊕"
 )
 
-var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+// Braille "ball" spinner: each frame keeps a full, centered mass that simply
+// rotates, so the glyph sits steady on the text baseline instead of the dot
+// hopping around the cell like the thin ⠋⠙⠹ set did.
+var spinnerFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
+
+// loaderGrad colors the moving head of the indeterminate sweep bar: a hot gold
+// comet head fading back through amber into the dim track. All four shades stay
+// readable on light and dark terminals.
+var loaderGrad = []lipgloss.Color{
+	lipgloss.Color("226"), // comet head — bright gold
+	lipgloss.Color("220"),
+	lipgloss.Color("214"),
+	lipgloss.Color("208"), // tail
+}
+
+// loaderBar renders a fixed-width indeterminate progress sweep: a glowing head
+// bounces back and forth across a dim track. Fixed width matters — the
+// surrounding top-bar segments must not jitter as it animates. `frame` is the
+// shared UI tick counter so it advances on its own.
+func loaderBar(frame, width int) string {
+	if width < 1 {
+		return ""
+	}
+	if width == 1 {
+		return lipgloss.NewStyle().Foreground(loaderGrad[0]).Render("━")
+	}
+	period := 2 * (width - 1)
+	pos := ((frame % period) + period) % period
+	if pos >= width {
+		pos = period - pos // bounce back from the right edge
+	}
+	var b strings.Builder
+	for i := 0; i < width; i++ {
+		d := pos - i
+		if d < 0 {
+			d = -d
+		}
+		c := colDeep
+		if d < len(loaderGrad) {
+			c = loaderGrad[d]
+		}
+		b.WriteString(lipgloss.NewStyle().Foreground(c).Render("━"))
+	}
+	return b.String()
+}
 
 func (m Model) View() string {
 	if m.width == 0 {
@@ -146,8 +206,8 @@ func (m Model) renderTop() string {
 	if m.client != nil && m.client.Dir != "" {
 		segs = append(segs, styleDim.Render(shortRepoPath(m.client.Dir)))
 	}
-	if m.loading {
-		segs = append(segs, styleWarn.Render(spinnerFrame(m.spinnerFrame)+" working"))
+	if ind := m.activityIndicator(); ind != "" {
+		segs = append(segs, ind)
 	}
 	if m.data.Status != nil {
 		segs = append(segs, chip("stacks", fmt.Sprintf("%d", len(m.data.Status.Stacks))))
@@ -277,6 +337,37 @@ func fetchedAgo(raw *string) string {
 	}
 }
 
+// activityIndicator returns a vivid, light-mode-safe "busy" chip for the top
+// bar, or "" when idle. Initial/blocking loads read "working"; background
+// auto-refreshes read "syncing" — so the user always knows the workspace is
+// being re-fetched even while the UI stays interactive. Both route through
+// styleLoad (bold amber) so they pop on light and dark terminals alike.
+// syncIndicatorDelayFrames is how long a background sync must run before its
+// indicator appears (~630ms at the 90ms UI tick). Periodic auto-refreshes
+// almost always finish faster than this, so the bar no longer flashes on every
+// cycle — it only shows for syncs slow enough to be worth surfacing.
+const syncIndicatorDelayFrames = 7
+
+func (m Model) activityIndicator() string {
+	var label string
+	switch {
+	case m.loading:
+		// User-initiated / blocking work — surface immediately.
+		label = "working"
+	case m.autoRefreshInFlight:
+		if m.spinnerFrame-m.autoRefreshStartFrame < syncIndicatorDelayFrames {
+			return ""
+		}
+		label = "syncing"
+	default:
+		return ""
+	}
+	// Steady ball spinner + fixed-width glowing sweep. Both are constant width,
+	// so the chips that follow don't shuffle frame to frame.
+	return styleLoad.Render(spinnerFrame(m.spinnerFrame)) + " " +
+		styleLoad.Render(label) + " " + loaderBar(m.spinnerFrame, 7)
+}
+
 func spinnerFrame(frame int) string {
 	if len(spinnerFrames) == 0 {
 		return ""
@@ -314,23 +405,33 @@ func previewStripHeight(bodyHeight int) int {
 	if bodyHeight < 14 {
 		return 0
 	}
-	want := bodyHeight * 30 / 100
-	if want < 6 {
-		want = 6
+	// The kanban columns usually have vertical slack, so give the diff a
+	// genuinely useful strip rather than a thin sliver.
+	want := bodyHeight * 38 / 100
+	if want < 9 {
+		want = 9
 	}
-	if want > 14 {
-		want = 14
+	if want > 18 {
+		want = 18
+	}
+	// Never starve the columns: keep at least 8 rows for the main area.
+	if bodyHeight-want < 8 {
+		want = max(0, bodyHeight-8)
 	}
 	return want
 }
 
 func (m Model) renderMain(width, height int) string {
-	if m.usesKanbanLayout() && len(m.filteredLanes()) > 0 {
-		return m.renderKanban(width, height)
+	if len(m.filteredLanes()) > 0 {
+		if m.usesKanbanLayout() {
+			return m.renderKanban(width, height)
+		}
+		// Narrow terminals can't show columns side by side, so the kanban folds
+		// into a single tabbed lane: a branch tab-strip on top (h/l switches
+		// branches), the active lane's contents below (j/k moves items).
+		return m.renderNarrow(width, height)
 	}
-	if m.focus == panelContents {
-		return m.renderContents(width, height)
-	}
+	// No lanes yet — the lanes panel hosts the bootstrap/loading/empty states.
 	return m.renderLanes(width, height)
 }
 
@@ -358,23 +459,42 @@ func (m Model) renderKanban(width, height int) string {
 		return box("kanban workspace", hint, width, height, true)
 	}
 
-	columnCount, columnWidth := m.kanbanGeometry(width)
+	columnCount, _ := m.kanbanGeometry(width)
 
-	// Pin lane 0 (zz unassigned) in the leftmost slot — it's the workspace context
-	// and must remain visible regardless of how far the user scrolls.
-	columns := []string{m.renderKanbanColumn(lanes[0], 0, columnWidth, height)}
-
+	// Collect the lanes that will actually be drawn (zz is pinned leftmost and
+	// always visible; the rest are windowed around the cursor).
+	type slot struct {
+		lane  lane
+		index int
+	}
+	slots := []slot{{lanes[0], 0}}
 	if columnCount > 1 && len(lanes) > 1 {
 		rest := lanes[1:]
-		slots := columnCount - 1
-		restStart := m.kanbanRestStart(len(rest), slots)
-		end := restStart + slots
+		visible := columnCount - 1
+		restStart := m.kanbanRestStart(len(rest), visible)
+		end := restStart + visible
 		if end > len(rest) {
 			end = len(rest)
 		}
 		for i := restStart; i < end; i++ {
-			columns = append(columns, m.renderKanbanColumn(rest[i], i+1, columnWidth, height))
+			slots = append(slots, slot{rest[i], i + 1})
 		}
+	}
+
+	// Spread the width evenly across the visible columns, handing the
+	// integer-division remainder to the leftmost columns one cell at a time.
+	// Columns end up within a single cell of each other and the board fills the
+	// width exactly, lining up flush with the preview below.
+	n := len(slots)
+	base := width / n
+	rem := width % n
+	columns := make([]string, n)
+	for i, s := range slots {
+		w := base
+		if i < rem {
+			w++
+		}
+		columns[i] = m.renderKanbanColumn(s.lane, s.index, w, height)
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, columns...)
 }
@@ -438,7 +558,6 @@ func (m Model) renderKanbanColumn(lane lane, index, width, height int) string {
 	innerW := contentWidth(width)
 	rows := []string{
 		laneMetaLine(lane, innerW),
-		"",
 	}
 	contents := m.contentForLane(lane)
 	if len(contents) == 0 {
@@ -495,16 +614,25 @@ func sectionDivider(width, files, commits int) string {
 
 func (m Model) kanbanItemLine(item contentItem, laneIndex, itemIndex, width int) string {
 	isCursor := laneIndex == m.laneCursor && itemIndex == m.contentCursor
-	return renderItemRow(item, m.selected[item.ID], isCursor, width)
+	focused := laneIndex == m.laneCursor
+	return renderItemRow(item, m.selected[item.ID], isCursor, focused, width)
 }
 
-func renderItemRow(item contentItem, isSelected, isCursor bool, width int) string {
+// renderItemRow draws one file/commit row as: [*]<glyph> <id> <label>[ #pr].
+//
+// Two behaviours make it read well at any width:
+//   - File paths keep their basename intact and elide the directory from the
+//     LEFT (…/components/Toolbar.tsx) — the meaningful part is never the part
+//     that gets cut.
+//   - Selection is focus-aware: the active panel's cursor row gets a solid blue
+//     bar, other panels show a muted grey band, so the eye always knows which
+//     column it's driving.
+func renderItemRow(item contentItem, isSelected, isCursor, focused bool, width int) string {
 	mark := " "
 	if isSelected {
 		mark = "*"
 	}
 	glyph := itemGlyph(item.Kind)
-	// Conflicted commits override the normal glyph with a warning sigil.
 	if item.Conflicted {
 		glyph = glyphConflict
 	}
@@ -520,36 +648,71 @@ func renderItemRow(item contentItem, isSelected, isCursor bool, width int) strin
 	if item.ReviewID != "" && item.Kind != contentChange {
 		prSuffix = " " + cleanReviewID(item.ReviewID)
 	}
-	// Compact layout: [*]◆ <id> <label>[ #pr] — the cursor row's background
-	// highlight indicates focus, so no leading arrow is needed.
-	prefix := fmt.Sprintf("%s%s ", mark, glyph)
+	prefix := mark + glyph + " "
 	idPart := id + " "
 	remaining := max(1, width-lipgloss.Width(prefix)-lipgloss.Width(idPart)-lipgloss.Width(prSuffix))
-	labelPart := fit(label, remaining)
-	raw := prefix + idPart + labelPart + prSuffix
-	raw = fit(raw, width)
 
-	if isCursor {
-		return styleSelectedRow.Render(padRight(raw, width))
-	}
-	out := raw
-	if mark == "*" {
-		out = strings.Replace(out, "*", styleMarked.Render("*"), 1)
-	}
-	if item.Conflicted {
-		out = strings.Replace(out, glyphConflict, styleErr.Render(glyphConflict), 1)
-	} else {
-		out = styleGlyph(out, glyph, item.Kind, item.Detail)
-	}
-	out = colorizeID(out, id, item.Kind, item.Detail)
+	// Build the label both plain (for width math + the cursor highlight) and
+	// styled (for the normal state), so the elided-path coloring survives.
+	var labelPlain, labelStyled string
 	if item.Kind == contentChange {
-		out = colorizeFilePath(out, label, item.Detail)
+		dir, base := compactPath(label, remaining)
+		labelPlain = dir + base
+		labelStyled = stylePathDim.Render(dir) + fileNameStyle(item.Detail).Render(base)
+	} else {
+		labelPlain = fit(label, remaining)
+		labelStyled = labelPlain
 	}
+
+	rawPlain := fit(prefix+idPart+labelPlain+prSuffix, width)
+	if isCursor {
+		style := styleSelectedRow
+		if !focused {
+			style = styleSelectedRowBlur
+		}
+		return style.Render(padRight(rawPlain, width))
+	}
+
+	markStyled := mark
+	if mark == "*" {
+		markStyled = styleMarked.Render("*")
+	}
+	out := markStyled + itemGlyphStyle(item, glyph) + " " + itemIDStyle(item).Render(id) + " " + labelStyled
 	if prSuffix != "" {
-		clean := strings.TrimSpace(prSuffix)
-		out = strings.Replace(out, clean, styleHotKey.Render(clean), 1)
+		out += " " + styleHotKey.Render(strings.TrimSpace(prSuffix))
 	}
-	return out
+	return fit(out, width)
+}
+
+// compactPath fits a file path into width while always preserving the whole
+// basename. When the full path doesn't fit it drops leading path SEGMENTS
+// (never cutting one mid-word) and prefixes "…/", keeping as many trailing
+// directories as will fit — so the reader gets "…/components/Toast.tsx" rather
+// than a meaningless "…rc/components/Toast.tsx". If even the basename overflows
+// it's truncated from the right as a last resort. Returns plain text.
+func compactPath(path string, width int) (dir, base string) {
+	base = filepath.Base(path)
+	if width <= 0 {
+		return "", ""
+	}
+	if lipgloss.Width(path) <= width {
+		return strings.TrimSuffix(path, base), base
+	}
+	if lipgloss.Width(base) >= width {
+		return "", fit(base, width)
+	}
+	// Re-grow the directory from the right, segment by whole segment, until the
+	// next one wouldn't fit alongside the leading ellipsis.
+	segs := strings.Split(strings.TrimSuffix(path, "/"+base), "/")
+	kept := ""
+	for i := len(segs) - 1; i >= 0; i-- {
+		cand := segs[i] + "/" + kept
+		if lipgloss.Width("…/"+cand+base) > width {
+			break
+		}
+		kept = cand
+	}
+	return "…/" + kept, base
 }
 
 func itemGlyph(kind contentKind) string {
@@ -564,21 +727,28 @@ func itemGlyph(kind contentKind) string {
 	return "·"
 }
 
-func styleGlyph(line, glyph string, kind contentKind, detail string) string {
-	style := styleKindInfo
-	switch kind {
+// itemGlyphStyle renders the leading glyph in its kind/status color.
+func itemGlyphStyle(item contentItem, glyph string) string {
+	if item.Conflicted {
+		return styleErr.Render(glyph)
+	}
+	switch item.Kind {
 	case contentChange:
-		style = fileChangeStyle(detail)
+		return fileChangeStyle(item.Detail).Render(glyph)
 	case contentCommit:
-		style = styleNodeCommit
+		return styleNodeCommit.Render(glyph)
 	case contentUpstreamCommit:
-		style = styleNodeUpstream
+		return styleNodeUpstream.Render(glyph)
 	}
-	idx := strings.Index(line, glyph)
-	if idx < 0 {
-		return line
+	return styleKindInfo.Render(glyph)
+}
+
+// itemIDStyle returns the style for the short CLI id of a row.
+func itemIDStyle(item contentItem) lipgloss.Style {
+	if item.Kind == contentChange {
+		return fileIDStyle(item.Detail)
 	}
-	return line[:idx] + style.Render(glyph) + line[idx+len(glyph):]
+	return styleIDDim
 }
 
 func displayItemID(item contentItem) string {
@@ -630,52 +800,12 @@ func fileIDStyle(detail string) lipgloss.Style {
 	return styleIDDim
 }
 
-func colorizeID(line, id string, kind contentKind, detail string) string {
-	if id == "" || id == "-" {
-		return line
-	}
-	style := styleIDDim
-	if kind == contentChange {
-		style = fileIDStyle(detail)
-	}
-	idx := strings.Index(line, id+" ")
-	if idx < 0 {
-		return line
-	}
-	return line[:idx] + style.Render(id) + line[idx+len(id):]
-}
-
-func colorizeFilePath(line, label, detail string) string {
-	if label == "" {
-		return line
-	}
-	nameStyle := fileNameStyle(detail)
-	base := filepath.Base(label)
-	if base == label || base == "" {
-		idx := strings.Index(line, label)
-		if idx < 0 {
-			return line
-		}
-		return line[:idx] + nameStyle.Render(label) + line[idx+len(label):]
-	}
-	dir := strings.TrimSuffix(label, base)
-	idx := strings.Index(line, label)
-	if idx < 0 {
-		// Label was truncated — tint just the basename fragment if visible.
-		bi := strings.Index(line, base)
-		if bi < 0 {
-			return line
-		}
-		return line[:bi] + nameStyle.Render(base) + line[bi+len(base):]
-	}
-	return line[:idx] + stylePathDim.Render(dir) + nameStyle.Render(base) + line[idx+len(label):]
-}
-
 func (m Model) kanbanColumnCursor(index int) int {
 	if index != m.laneCursor {
 		return 0
 	}
-	base := m.contentCursor + 2
+	// Body rows are [meta, content…]; the cursor sits one row below the meta line.
+	base := m.contentCursor + 1
 	// Off-by-one: the rendered column inserts a section divider after the last
 	// file when commits follow. Bump base when the cursor sits past that divider.
 	contents := m.contents()
@@ -724,14 +854,75 @@ func (m Model) renderLanes(width, height int) string {
 	return box(title, strings.Join(rows, "\n"), width, height, m.focus == panelLanes)
 }
 
-func (m Model) renderContents(width, height int) string {
-	rows := m.contentLines(max(1, width-4), max(1, height-3))
-	label := "contents"
-	if lane, ok := m.selectedLane(); ok {
-		label = lane.Name
+// renderNarrow draws the single-column (sub-kanban-width) layout: a windowed
+// branch tab-strip as the panel title, with the active lane's contents below.
+// h/l move between branches (tabs), j/k move within the contents.
+func (m Model) renderNarrow(width, height int) string {
+	innerW := contentWidth(width)
+	strip := m.laneTabStrip(innerW)
+	rows := m.contentLines(innerW, max(1, contentHeight(height)-1))
+	return boxWithStyle(strip, strings.Join(rows, "\n"), width, height, styleFocus)
+}
+
+// laneTabStrip renders the branches as a horizontal, windowed tab bar centered
+// on the current lane. The active tab is highlighted; "‹"/"›" mark that more
+// branches exist off either edge. A leading "i/n" counter orients the user so
+// the h/l navigation is obvious even when not all tabs fit.
+func (m Model) laneTabStrip(width int) string {
+	lanes := m.filteredLanes()
+	n := len(lanes)
+	if n == 0 || width <= 0 {
+		return titleSpan("workspace", true)
 	}
-	title := titleSpan(label, m.focus == panelContents)
-	return box(title, strings.Join(rows, "\n"), width, height, m.focus == panelContents)
+	label := func(i int) string {
+		if lanes[i].Kind == laneUnassigned {
+			return "zz"
+		}
+		return lanes[i].Name
+	}
+
+	counter := fmt.Sprintf("%d/%d ", m.laneCursor+1, n)
+	// Grow a window outward from the cursor while tabs still fit. Budget leaves
+	// room for the counter and the two edge arrows.
+	lo, hi := m.laneCursor, m.laneCursor
+	used := lipgloss.Width(counter) + lipgloss.Width(label(m.laneCursor)) + 4
+	for {
+		grew := false
+		if lo > 0 {
+			if w := lipgloss.Width(" · " + label(lo-1)); used+w <= width {
+				lo--
+				used += w
+				grew = true
+			}
+		}
+		if hi < n-1 {
+			if w := lipgloss.Width(" · " + label(hi+1)); used+w <= width {
+				hi++
+				used += w
+				grew = true
+			}
+		}
+		if !grew {
+			break
+		}
+	}
+
+	parts := make([]string, 0, hi-lo+1)
+	for i := lo; i <= hi; i++ {
+		if i == m.laneCursor {
+			parts = append(parts, styleSelectedRow.Render(" "+label(i)+" "))
+		} else {
+			parts = append(parts, styleTitleBlur.Render(label(i)))
+		}
+	}
+	strip := strings.Join(parts, styleDim.Render(" · "))
+	if lo > 0 {
+		strip = styleAccent.Render("‹ ") + strip
+	}
+	if hi < n-1 {
+		strip = strip + styleAccent.Render(" ›")
+	}
+	return fit(styleDim.Render(counter)+strip, width)
 }
 
 func (m Model) renderPreview(width, height int) string {
@@ -740,7 +931,20 @@ func (m Model) renderPreview(width, height int) string {
 }
 
 func (m Model) previewTitle(focused bool) string {
-	return titleSpan("preview", focused)
+	title := titleSpan("preview", focused)
+	if item, ok := m.selectedContent(); ok && item.ID != "" {
+		var name string
+		switch item.Kind {
+		case contentChange:
+			name = filepath.Base(item.Label)
+		case contentCommit, contentUpstreamCommit:
+			name = firstLine(item.Label)
+		}
+		if name != "" {
+			title += styleDim.Render(" "+sepDot+" ") + styleFileName.Render(name)
+		}
+	}
+	return title
 }
 
 func (m Model) laneLines(width, height int) []string {
@@ -768,8 +972,11 @@ func (m Model) laneLines(width, height int) []string {
 }
 
 func (m Model) loadingLines(width, height int) []string {
+	barW := min(28, max(6, width-2))
 	return fitStateLines([]string{
-		styleAccent.Render(spinnerFrame(m.spinnerFrame) + " loading GitButler status"),
+		styleLoad.Render(spinnerFrame(m.spinnerFrame)) + "  " + styleLoad.Render("loading GitButler status"),
+		loaderBar(m.spinnerFrame, barW),
+		"",
 		styleDim.Render("LazyBut is open; `but status -j` is running in the background."),
 		styleDim.Render("Huge repositories can take a while; the UI should stay responsive."),
 		"",
@@ -935,11 +1142,13 @@ func syncChipPlain(lane lane) string {
 
 func laneMetaLine(lane lane, width int) string {
 	parts := []string{}
+	// Compact "Nf · Nc" counts (instead of "N files · N commits") leave room for
+	// the higher-signal CI and PR chips, which used to get truncated away.
 	if lane.ChangeCount > 0 {
-		parts = append(parts, styleDim.Render(plural(lane.ChangeCount, "file", "files")))
+		parts = append(parts, styleDim.Render(fmt.Sprintf("%df", lane.ChangeCount)))
 	}
 	if lane.CommitCount > 0 {
-		parts = append(parts, styleDim.Render(plural(lane.CommitCount, "commit", "commits")))
+		parts = append(parts, styleDim.Render(fmt.Sprintf("%dc", lane.CommitCount)))
 	}
 	if lane.MergeClean != nil && !*lane.MergeClean {
 		parts = append(parts, styleErr.Render(glyphConflict+" conflict"))
@@ -1025,7 +1234,7 @@ func (m Model) contentLines(width, height int) []string {
 
 func (m Model) formatContentLine(item contentItem, idx, width int) string {
 	isCursor := idx == m.contentCursor
-	return renderItemRow(item, m.selected[item.ID], isCursor, width)
+	return renderItemRow(item, m.selected[item.ID], isCursor, m.focus == panelContents, width)
 }
 
 func (m Model) previewLines(width, height int) []string {
@@ -1066,7 +1275,7 @@ func (m Model) previewBodyRows(width int) []string {
 	}
 	if m.preview == "" {
 		if m.previewSelectionTarget() != "" {
-			return []string{styleDim.Render("loading diff…")}
+			return []string{styleLoad.Render(spinnerFrame(m.spinnerFrame) + " loading diff…")}
 		}
 		return nil
 	}
@@ -1791,7 +2000,7 @@ func (m Model) renderHelp() string {
 	header := styleAccent.Render("lazybut · help")
 	body := strings.Join([]string{
 		styleDim.Render("Navigation"),
-		"  " + styleHotKey.Render("h/l") + " " + styleHotLabel.Render("columns") + "   " + styleHotKey.Render("j/k") + " " + styleHotLabel.Render("items") + "   " + styleHotKey.Render("tab") + " " + styleHotLabel.Render("focus") + "   " + styleHotKey.Render("/") + " " + styleHotLabel.Render("filter"),
+		"  " + styleHotKey.Render("h/l") + " " + styleHotLabel.Render("branches") + "   " + styleHotKey.Render("j/k") + " " + styleHotLabel.Render("items") + "   " + styleHotKey.Render("space/v") + " " + styleHotLabel.Render("select") + "   " + styleHotKey.Render("/") + " " + styleHotLabel.Render("filter"),
 		"  " + styleHotKey.Render("ctrl+u/d") + " " + styleHotLabel.Render("scroll preview") + "   " + styleHotLabel.Render("(mouse wheel works on every panel)"),
 		"",
 		styleDim.Render("Workspace"),
@@ -1803,7 +2012,7 @@ func (m Model) renderHelp() string {
 		"  " + styleHotLabel.Render("destructive actions ask confirmation before running ") + styleAccent.Render("but"),
 		"",
 		styleDim.Render("Layout"),
-		"  " + styleHotLabel.Render("kanban above ~70 cols · focused list below · preview strip docks at the bottom"),
+		"  " + styleHotLabel.Render("kanban above ~70 cols · tabbed single lane below · preview docks at the bottom"),
 		"",
 		styleHotKey.Render("esc") + " " + styleHotLabel.Render("closes this help"),
 	}, "\n")
@@ -2044,7 +2253,10 @@ func preserveID(id, label string, maxLabelWidth int) string {
 }
 
 func contentWidth(width int) int {
-	return max(1, width-4)
+	// A bordered box only spends one column per side on its frame; the previous
+	// width-4 left two dead columns inside every panel (and a ragged gap at the
+	// right edge of the kanban). width-2 makes each column fill its full slot.
+	return max(1, width-2)
 }
 
 func contentHeight(height int) int {
