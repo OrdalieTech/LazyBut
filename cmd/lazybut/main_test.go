@@ -21,7 +21,7 @@ func TestParseSizeRejectsInvalidInput(t *testing.T) {
 }
 
 func TestSelfUpdateCommandUsesInstallDirAndRef(t *testing.T) {
-	cmd, installDir, err := selfUpdateCommand("v0.1.8", "/tmp/bin")
+	cmd, installDir, env, err := selfUpdateCommand("v0.1.8", "/tmp/bin")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,6 +37,9 @@ func TestSelfUpdateCommandUsesInstallDirAndRef(t *testing.T) {
 	if installDir != "/tmp/bin" {
 		t.Fatalf("installDir = %q", installDir)
 	}
+	if len(env) != 0 {
+		t.Fatalf("env = %v, want empty", env)
+	}
 }
 
 func TestDefaultUpdateRefUsesLatestRelease(t *testing.T) {
@@ -46,7 +49,24 @@ func TestDefaultUpdateRefUsesLatestRelease(t *testing.T) {
 }
 
 func TestSelfUpdateCommandRejectsEmptyRef(t *testing.T) {
-	if _, _, err := selfUpdateCommand(" ", "/tmp/bin"); err == nil {
+	if _, _, _, err := selfUpdateCommand(" ", "/tmp/bin"); err == nil {
 		t.Fatal("expected empty ref to fail")
+	}
+}
+
+func TestSelfUpdateUsesDirectProxyForMovingRefs(t *testing.T) {
+	for _, ref := range []string{"main", "feature/test"} {
+		env := selfUpdateEnv(ref)
+		if len(env) != 1 || env[0] != "GOPROXY=direct" {
+			t.Fatalf("selfUpdateEnv(%q) = %v, want GOPROXY=direct", ref, env)
+		}
+	}
+}
+
+func TestSelfUpdateKeepsProxyForLatestAndTags(t *testing.T) {
+	for _, ref := range []string{"latest", "v0.1.13"} {
+		if env := selfUpdateEnv(ref); len(env) != 0 {
+			t.Fatalf("selfUpdateEnv(%q) = %v, want empty", ref, env)
+		}
 	}
 }

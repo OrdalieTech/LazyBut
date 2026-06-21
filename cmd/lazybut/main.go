@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 
@@ -17,6 +18,10 @@ const modulePath = "github.com/OrdalieTech/LazyBut/cmd/lazybut"
 const defaultUpdateRef = "latest"
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "--version") {
+		fmt.Println("lazybut " + versionString())
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "update" {
 		if err := runSelfUpdate(os.Args[2:]); err != nil {
 			if err == flag.ErrHelp {
@@ -64,18 +69,18 @@ func runSelfUpdate(args []string) error {
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected update argument %q", flags.Arg(0))
 	}
-	cmd, targetDir, err := selfUpdateCommand(*ref, *installDir)
+	cmd, targetDir, env, err := selfUpdateCommand(*ref, *installDir)
 	if err != nil {
 		return err
 	}
 	fmt.Printf("Updating lazybut from %s...\n", modulePath+"@"+*ref)
 	fmt.Printf("Installing to %s\n", targetDir)
 	if *dryRun {
-		fmt.Println(strings.Join(append([]string{"GOBIN=" + targetDir}, cmd...), " "))
+		fmt.Println(strings.Join(append(append([]string{"GOBIN=" + targetDir}, env...), cmd...), " "))
 		return nil
 	}
 	command := exec.Command(cmd[0], cmd[1:]...)
-	command.Env = append(os.Environ(), "GOBIN="+targetDir)
+	command.Env = append(os.Environ(), append([]string{"GOBIN=" + targetDir}, env...)...)
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
 	if err := command.Run(); err != nil {
@@ -85,15 +90,15 @@ func runSelfUpdate(args []string) error {
 	return nil
 }
 
-func selfUpdateCommand(ref, installDir string) ([]string, string, error) {
+func selfUpdateCommand(ref, installDir string) ([]string, string, []string, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
-		return nil, "", fmt.Errorf("update ref cannot be empty")
+		return nil, "", nil, fmt.Errorf("update ref cannot be empty")
 	}
 	if installDir == "" {
 		executable, err := os.Executable()
 		if err != nil {
-			return nil, "", fmt.Errorf("locate current executable: %w", err)
+			return nil, "", nil, fmt.Errorf("locate current executable: %w", err)
 		}
 		resolved, err := filepath.EvalSymlinks(executable)
 		if err == nil {
@@ -101,7 +106,44 @@ func selfUpdateCommand(ref, installDir string) ([]string, string, error) {
 		}
 		installDir = filepath.Dir(executable)
 	}
-	return []string{"go", "install", modulePath + "@" + ref}, installDir, nil
+	return []string{"go", "install", modulePath + "@" + ref}, installDir, selfUpdateEnv(ref), nil
+}
+
+func selfUpdateEnv(ref string) []string {
+	if isMovingRef(ref) {
+		// The public Go proxy can cache branch queries such as @main long enough to
+		// make self-update appear stuck or even downgrade. Tags and @latest stay on
+		// the proxy path; moving refs go direct to GitHub.
+		return []string{"GOPROXY=direct"}
+	}
+	return nil
+}
+
+func isMovingRef(ref string) bool {
+	ref = strings.TrimSpace(ref)
+	if ref == "" || ref == "latest" || strings.HasPrefix(ref, "v") {
+		return false
+	}
+	return true
+}
+
+func versionString() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+	if info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	for _, setting := range info.Settings {
+		if setting.Key == "vcs.revision" && setting.Value != "" {
+			if len(setting.Value) > 12 {
+				return setting.Value[:12]
+			}
+			return setting.Value
+		}
+	}
+	return "dev"
 }
 
 func parseSize(value string) (int, int, error) {
