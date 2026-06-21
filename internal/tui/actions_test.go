@@ -329,20 +329,20 @@ func TestMouseWheelAndClickNavigation(t *testing.T) {
 
 	nextModel, _ := model.handleMouse(tea.MouseMsg{Button: tea.MouseButtonWheelRight})
 	next := nextModel.(Model)
-	if next.laneCursor != 1 {
-		t.Fatalf("wheel right lane = %d, want 1", next.laneCursor)
+	if next.laneCursor != 0 {
+		t.Fatalf("wheel right lane = %d, want 0", next.laneCursor)
+	}
+
+	nextModel, _ = next.handleMouse(tea.MouseMsg{X: 35, Y: 5, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	next = nextModel.(Model)
+	if next.laneCursor != 1 || next.contentCursor != 0 {
+		t.Fatalf("click lane/content = %d/%d, want 1/0", next.laneCursor, next.contentCursor)
 	}
 
 	nextModel, _ = next.handleMouse(tea.MouseMsg{Button: tea.MouseButtonWheelDown})
 	next = nextModel.(Model)
-	if next.contentCursor != 1 {
-		t.Fatalf("wheel down content = %d, want 1", next.contentCursor)
-	}
-
-	nextModel, _ = next.handleMouse(tea.MouseMsg{X: 0, Y: 6, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
-	next = nextModel.(Model)
-	if next.laneCursor != 0 {
-		t.Fatalf("click lane = %d, want 0", next.laneCursor)
+	if next.laneCursor != 1 || next.contentCursor != 1 {
+		t.Fatalf("wheel down lane/content = %d/%d, want 1/1", next.laneCursor, next.contentCursor)
 	}
 }
 

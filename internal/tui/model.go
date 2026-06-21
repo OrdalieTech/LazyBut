@@ -31,6 +31,7 @@ const (
 	modeBranchPicker
 	modeHelp
 	modeTargetPicker // generic picker for actions that need to choose from a list (assign, move, etc.)
+	modeDiff         // full-screen diff view with line-level navigation
 )
 
 const (
@@ -74,6 +75,7 @@ const (
 	actionNewDraftPR       actionID = "new_draft_pr"
 	actionPRDraft          actionID = "pr_draft"
 	actionPRReady          actionID = "pr_ready"
+	actionCopyPRURL        actionID = "copy_pr_url"
 	actionResolveStatus    actionID = "resolve_status"
 	actionResolveFinish    actionID = "resolve_finish"
 	actionResolveCancel    actionID = "resolve_cancel"
@@ -113,6 +115,7 @@ type Model struct {
 
 	data          workspaceData
 	loading       bool
+	loadingLabel  string // e.g. "pushing", "pulling", shown in the activity indicator
 	err           error
 	toast         string
 	toastKind     toastKind
@@ -147,6 +150,10 @@ type Model struct {
 	branchCursor  int
 
 	targetPicker targetPickerState
+
+	// diffState backs modeDiff — a full-screen diff view.
+	diffCursor int // cursor row in the diff body
+	diffScroll int // scroll offset for the diff body
 }
 
 // targetPickerState backs modeTargetPicker — a generic "select one of these"
@@ -371,7 +378,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 	case startupRefreshMsg:
-		return m.startLoading(), m.statusLoadCmd()
+		return m.startLoading("loading status"), m.statusLoadCmd()
 	case fastStatusMsg:
 		if msg.err != nil || m.data.Status != nil {
 			return m, nil
@@ -380,7 +387,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clampCursors()
 		return m.withPreview()
 	case loadedMsg:
-		m.loading = false
+		m = m.stopLoading()
 		m.err = msg.err
 		if msg.err == nil {
 			m = m.replaceData(msg.status, msg.branches)
@@ -392,7 +399,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setToast(msg.err.Error(), toastError)
 		return m.maybePromptForBootstrap(msg.err), nil
 	case upstreamRefreshMsg:
-		m.loading = false
+		m = m.stopLoading()
 		m.err = msg.err
 		if msg.err != nil {
 			m.setToast(msg.err.Error(), toastError)
@@ -407,7 +414,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mode = modeConfirm
 		return m, nil
 	case mutationMsg:
-		m.loading = false
+		m = m.stopLoading()
 		m.err = msg.err
 		if msg.err == nil && msg.status != nil {
 			m = m.replaceData(msg.status, m.data.Branches)
@@ -421,7 +428,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case branchListMsg:
-		m.loading = false
+		m = m.stopLoading()
 		if msg.err != nil {
 			m.setToast("branch list: "+msg.err.Error(), toastError)
 			return m, nil
@@ -432,7 +439,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case installGitButlerMsg:
-		m.loading = false
+		m = m.stopLoading()
 		if msg.err != nil {
 			m.err = fmt.Errorf("%w: %s", msg.err, strings.TrimSpace(msg.body))
 			m.setToast(m.err.Error(), toastError)
@@ -440,7 +447,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.err = nil
 		m.setToast("GitButler CLI installed; refreshing", toastSuccess)
-		return m.startLoading(), m.statusLoadCmd()
+		return m.startLoading("loading status"), m.statusLoadCmd()
 	case tickMsg:
 		m.spinnerFrame++
 		// Toast auto-fades after a few seconds.
@@ -498,7 +505,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case oplogLoadedMsg:
-		m.loading = false
+		m = m.stopLoading()
 		if msg.err != nil {
 			m.setToast(msg.err.Error(), toastError)
 			return m, nil
@@ -537,6 +544,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleTargetPickerMouse(msg)
 		case modeConfirm:
 			return m.handleConfirmMouse(msg)
+		case modeDiff:
+			return m.handleDiffMouse(msg)
 		case modeNormal:
 			return m.handleMouse(msg)
 		default:
@@ -553,28 +562,20 @@ func (m Model) handleMouse(mouse tea.MouseMsg) (tea.Model, tea.Cmd) {
 	switch mouse.Button {
 	case tea.MouseButtonWheelUp:
 		if m.inPreviewZone(mouse.Y) {
-			return m.scrollPreview(-3), nil
+			return m.scrollPreview(-1), nil
 		}
 		if m.usesKanbanLayout() {
-			return m.moveKanbanItem(-3)
+			return m.moveKanbanItem(-1)
 		}
-		return m.move(-3)
+		return m.move(-1)
 	case tea.MouseButtonWheelDown:
 		if m.inPreviewZone(mouse.Y) {
-			return m.scrollPreview(3), nil
+			return m.scrollPreview(1), nil
 		}
 		if m.usesKanbanLayout() {
-			return m.moveKanbanItem(3)
+			return m.moveKanbanItem(1)
 		}
-		return m.move(3)
-	case tea.MouseButtonWheelLeft:
-		if m.usesKanbanLayout() && !m.inPreviewZone(mouse.Y) {
-			return m.moveLane(-1)
-		}
-	case tea.MouseButtonWheelRight:
-		if m.usesKanbanLayout() && !m.inPreviewZone(mouse.Y) {
-			return m.moveLane(1)
-		}
+		return m.move(1)
 	case tea.MouseButtonLeft:
 		if mouse.Action != tea.MouseActionPress {
 			return m, nil
@@ -612,6 +613,15 @@ func (m Model) scrollPreview(delta int) Model {
 	m.previewScroll += delta
 	if m.previewScroll < 0 {
 		m.previewScroll = 0
+	}
+	// Clamp so the scroll can't run past the end of the preview content.
+	if m.hasPreviewStrip() {
+		totalRows := len(m.previewRawRows(contentWidth(m.width)))
+		visibleRows := contentHeight(previewStripHeight(max(1, m.height-2)))
+		maxScroll := max(0, totalRows-visibleRows)
+		if m.previewScroll > maxScroll {
+			m.previewScroll = maxScroll
+		}
 	}
 	return m
 }
@@ -691,6 +701,8 @@ func (m Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleBranchPickerKey(key)
 	case modeTargetPicker:
 		return m.handleTargetPickerKey(key)
+	case modeDiff:
+		return m.handleDiffKey(key)
 	case modeHelp:
 		if key.String() == "esc" || key.String() == "?" || key.String() == "q" {
 			m.mode = modeNormal
@@ -735,17 +747,23 @@ func (m Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "v":
 		return m.rangeSelection()
 	case "r", "ctrl+r":
-		return m.startLoading(), m.statusLoadCmd()
+		return m.startLoading("loading status"), m.statusLoadCmd()
 	case "ctrl+u":
-		return m.scrollPreview(-5), nil
+		return m.scrollPreview(-3), nil
 	case "ctrl+d":
-		return m.scrollPreview(5), nil
+		return m.scrollPreview(3), nil
 	}
 
 	// Whenever there are lanes, h/l move between branches and j/k move within the
 	// active branch — identical in the wide kanban and the narrow tabbed view, so
 	// the navigation muscle memory carries across terminal sizes.
 	if len(m.filteredLanes()) > 0 {
+		// enter on a file change opens the full-screen diff view.
+		if key.String() == "enter" {
+			if item, ok := m.selectedContent(); ok && item.Kind == contentChange && item.ID != "" {
+				return m.enterDiffMode()
+			}
+		}
 		switch key.String() {
 		case "tab", "l", "right", "enter":
 			return m.moveLane(1)
@@ -1024,7 +1042,7 @@ func (m Model) handleBranchPickerKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		branch := branches[m.branchCursor].Name
 		m.mode = modeNormal
-		return m.startLoading(), m.mutationCmd("branch added", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("adding branch"), m.mutationCmd("branch added", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Apply(context.Background(), branch)
 		})
 	default:
@@ -1235,7 +1253,7 @@ func (m Model) handleBranchPickerMouse(mouse tea.MouseMsg) (tea.Model, tea.Cmd) 
 			m.branchCursor = row
 			branch := branches[row].Name
 			m.mode = modeNormal
-			return m.startLoading(), m.mutationCmd("branch added", func() (*gitbutler.WorkspaceStatus, error) {
+			return m.startLoading("adding branch"), m.mutationCmd("branch added", func() (*gitbutler.WorkspaceStatus, error) {
 				return m.client.Apply(context.Background(), branch)
 			})
 		}
@@ -1268,11 +1286,11 @@ func branchPickerWindowHeight(height int) int {
 func (m Model) startAction(action action) (tea.Model, tea.Cmd) {
 	// actionRestore needs to load the oplog list first, then show a picker.
 	if action.ID == actionRestore {
-		m = m.startLoading()
+		m = m.startLoading("loading snapshots")
 		return m, m.oplogListCmd()
 	}
 	if action.ID == actionPull && m.incomingChangeCount() == 0 {
-		return m.startLoading(), m.upstreamRefreshCmd()
+		return m.startLoading("checking upstream"), m.upstreamRefreshCmd()
 	}
 	// Some actions are best served by a picker instead of free-text input.
 	if picker, ok := m.pickerForAction(action); ok {
@@ -1457,60 +1475,60 @@ func (m Model) execute(action action, input string) (tea.Model, tea.Cmd) {
 	case actionAddBranch:
 		return m.openBranchPicker()
 	case actionRefresh:
-		return m.startLoading(), m.statusLoadCmd()
+		return m.startLoading("loading status"), m.statusLoadCmd()
 	case actionInstallGitButler:
-		return m.startLoading(), m.installGitButlerCmd()
+		return m.startLoading("installing GitButler"), m.installGitButlerCmd()
 	case actionSetup:
-		return m.startLoading(), m.mutationCmd("GitButler setup complete", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("setting up GitButler"), m.mutationCmd("GitButler setup complete", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Setup(ctx, false)
 		})
 	case actionSetupInit:
-		return m.startLoading(), m.mutationCmd("GitButler setup complete", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("setting up GitButler"), m.mutationCmd("GitButler setup complete", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Setup(ctx, true)
 		})
 	case actionNewBranch:
-		return m.startLoading(), m.mutationCmd("branch created", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("creating branch"), m.mutationCmd("branch created", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.NewBranch(ctx, input, "")
 		})
 	case actionNewStacked:
 		anchor := selectedLane.Name
-		return m.startLoading(), m.mutationCmd("stacked branch created", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("creating stacked branch"), m.mutationCmd("stacked branch created", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.NewBranch(ctx, input, anchor)
 		})
 	case actionStage:
-		return m.startLoading(), m.mutationCmd("change assigned", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("assigning change"), m.mutationCmd("change assigned", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.StageMany(ctx, changeIDs, input)
 		})
 	case actionApplyToggle:
-		return m.startLoading(), m.mutationCmd("branch visibility changed", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("toggling branch"), m.mutationCmd("branch visibility changed", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Unapply(ctx, branchRef, false)
 		})
 	case actionCommit:
-		return m.startLoading(), m.mutationCmd("committed", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("committing"), m.mutationCmd("committed", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Commit(ctx, branchRef, input, changeIDs, false)
 		})
 	case actionRename:
-		return m.startLoading(), m.mutationCmd("renamed", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("renaming branch"), m.mutationCmd("renamed", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Reword(ctx, firstNonEmpty(selectedLane.ID, selectedLane.Name), input)
 		})
 	case actionDelete:
-		return m.startLoading(), m.mutationCmd("branch deleted", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("deleting branch"), m.mutationCmd("branch deleted", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.DeleteBranch(ctx, branchRef)
 		})
 	case actionDiscard:
-		return m.startLoading(), m.mutationCmd("discarded", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("discarding"), m.mutationCmd("discarded", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Discard(ctx, firstNonEmpty(first(changeIDs), selectedContent.ID))
 		})
 	case actionAmend:
-		return m.startLoading(), m.mutationCmd("amended", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("amending"), m.mutationCmd("amended", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Amend(ctx, firstNonEmpty(first(changeIDs), selectedContent.ID), input)
 		})
 	case actionAbsorb:
-		return m.startLoading(), m.mutationCmd("absorbed", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("absorbing"), m.mutationCmd("absorbed", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Absorb(ctx)
 		})
 	case actionSquash:
-		return m.startLoading(), m.mutationCmd("squashed", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("squashing"), m.mutationCmd("squashed", func() (*gitbutler.WorkspaceStatus, error) {
 			targets := strings.Fields(input)
 			if len(targets) == 0 {
 				targets = commitIDs
@@ -1519,21 +1537,21 @@ func (m Model) execute(action action, input string) (tea.Model, tea.Cmd) {
 		})
 	case actionUncommit:
 		target := firstNonEmpty(selectedContent.ID, selectedLane.ID, selectedLane.Name)
-		return m.startLoading(), m.mutationCmd("uncommitted", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("uncommitting"), m.mutationCmd("uncommitted", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Uncommit(ctx, target, false)
 		})
 	case actionMove:
 		source := firstNonEmpty(selectedContent.ID, selectedLane.ID, selectedLane.Name)
-		return m.startLoading(), m.mutationCmd("moved", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("moving"), m.mutationCmd("moved", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Move(ctx, source, input)
 		})
 	case actionRub:
 		source := firstNonEmpty(selectedContent.ID, selectedLane.ID, selectedLane.Name)
-		return m.startLoading(), m.mutationCmd("rubbed", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("rubbing"), m.mutationCmd("rubbed", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Rub(ctx, source, input)
 		})
 	case actionMerge:
-		return m.startLoading(), m.mutationCmd("merged", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("merging"), m.mutationCmd("merged", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Merge(ctx, branchRef)
 		})
 	case actionPullCheck:
@@ -1546,17 +1564,17 @@ func (m Model) execute(action action, input string) (tea.Model, tea.Cmd) {
 			return formatPullCheckOutput(summary, out), nil
 		})
 	case actionPull:
-		return m.startLoading(), m.mutationCmd("updated from upstream", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("pulling"), m.mutationCmd("updated from upstream", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Pull(ctx)
 		})
 	case actionPush:
-		return m.startLoading(), m.mutationCmd("pushed", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("pushing"), m.mutationCmd("pushed", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Push(ctx, branchRef, false)
 		})
 	case actionPushDryRun:
 		return m, m.textCmd("message", func() (string, error) { return m.client.PushDryRun(ctx, branchRef) })
 	case actionForcePush:
-		return m.startLoading(), m.mutationCmd("force pushed", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("force pushing"), m.mutationCmd("force pushed", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Push(ctx, branchRef, true)
 		})
 	case actionNewPR:
@@ -1564,37 +1582,48 @@ func (m Model) execute(action action, input string) (tea.Model, tea.Cmd) {
 	case actionNewDraftPR:
 		return m, m.textCmd("message", func() (string, error) { return m.client.NewPR(ctx, branchRef, true) })
 	case actionPRDraft:
-		return m.startLoading(), m.mutationCmd("PR set draft", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("setting PR draft"), m.mutationCmd("PR set draft", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.SetPRDraft(ctx, branchRef)
 		})
 	case actionPRReady:
-		return m.startLoading(), m.mutationCmd("PR set ready", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("setting PR ready"), m.mutationCmd("PR set ready", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.SetPRReady(ctx, branchRef)
 		})
+	case actionCopyPRURL:
+		if selectedLane.ReviewURL == "" {
+			m.setToast("no PR URL for this branch", toastInfo)
+			return m, nil
+		}
+		if err := copyToClipboard(selectedLane.ReviewURL); err != nil {
+			m.setToast("copy failed: "+err.Error(), toastError)
+			return m, nil
+		}
+		m.setToast("copied PR URL: "+selectedLane.ReviewURL, toastSuccess)
+		return m, nil
 	case actionResolveStatus:
 		return m, m.textCmd("message", func() (string, error) { return m.client.ResolveStatus(ctx) })
 	case actionResolveFinish:
-		return m.startLoading(), m.mutationCmd("resolution finished", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("finishing resolve"), m.mutationCmd("resolution finished", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.ResolveFinish(ctx)
 		})
 	case actionResolveCancel:
-		return m.startLoading(), m.mutationCmd("resolution cancelled", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("cancelling resolve"), m.mutationCmd("resolution cancelled", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.ResolveCancel(ctx)
 		})
 	case actionUndo:
-		return m.startLoading(), m.mutationCmd("undone", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("undoing"), m.mutationCmd("undone", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Undo(ctx)
 		})
 	case actionSnapshot:
 		return m, m.textCmd("message", func() (string, error) { return m.client.OplogSnapshot(ctx, input) })
 	case actionRestore:
-		return m.startLoading(), m.mutationCmd("snapshot restored", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("restoring snapshot"), m.mutationCmd("snapshot restored", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.OplogRestore(ctx, input)
 		})
 	case actionCleanDryRun:
 		return m, m.textCmd("message", func() (string, error) { return m.client.CleanDryRun(ctx) })
 	case actionClean:
-		return m.startLoading(), m.mutationCmd("cleaned", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoading("cleaning"), m.mutationCmd("cleaned", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Clean(ctx)
 		})
 	default:
@@ -1606,7 +1635,7 @@ func (m Model) execute(action action, input string) (tea.Model, tea.Cmd) {
 func (m Model) openBranchPicker() (tea.Model, tea.Cmd) {
 	if m.data.Branches == nil {
 		m.setToast("loading inactive branches", toastInfo)
-		return m.startLoading(), m.branchListCmd(true)
+		return m.startLoading("loading branches"), m.branchListCmd(true)
 	}
 	if len(m.data.BranchOptions) == 0 {
 		m.toast = "no inactive branches to add"
@@ -1993,11 +2022,18 @@ func (m *Model) restoreCursors(laneKey, contentID string) {
 	m.clampCursors()
 }
 
-func (m Model) startLoading() Model {
+func (m Model) startLoading(label string) Model {
 	m.loading = true
+	m.loadingLabel = label
 	m.err = nil
 	// Keep an existing toast visible — don't blank user feedback when a follow-up
 	// refresh kicks off automatically.
+	return m
+}
+
+func (m Model) stopLoading() Model {
+	m.loading = false
+	m.loadingLabel = ""
 	return m
 }
 
@@ -2088,4 +2124,102 @@ func (m Model) selectedContent() (contentItem, bool) {
 		return contentItem{}, false
 	}
 	return contents[m.contentCursor], true
+}
+
+// enterDiffMode opens the full-screen diff view for the selected file change.
+// The diff content must already be loaded in m.preview (via withPreview).
+func (m Model) enterDiffMode() (tea.Model, tea.Cmd) {
+	if m.preview == "" {
+		m.setToast("loading diff — try again in a moment", toastInfo)
+		return m, nil
+	}
+	m.mode = modeDiff
+	m.diffCursor = 0
+	m.diffScroll = 0
+	return m, nil
+}
+
+// diffBodyLines returns the raw diff body lines (without the header or box
+// decoration) that the diff view renders and navigates.
+func (m Model) diffBodyLines() []string {
+	return m.previewBodyRows(contentWidth(m.width))
+}
+
+// handleDiffKey handles keyboard input in the full-screen diff view.
+func (m Model) handleDiffKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	lines := m.diffBodyLines()
+	switch key.String() {
+	case "esc", "q":
+		m.mode = modeNormal
+		return m, nil
+	case "j", "down":
+		if m.diffCursor < len(lines)-1 {
+			m.diffCursor++
+		}
+	case "k", "up":
+		if m.diffCursor > 0 {
+			m.diffCursor--
+		}
+	case "pgdown":
+		m.diffCursor = min(len(lines)-1, m.diffCursor+10)
+	case "pgup":
+		m.diffCursor = max(0, m.diffCursor-10)
+	case "g":
+		m.diffCursor = 0
+	case "G":
+		m.diffCursor = max(0, len(lines)-1)
+	case "ctrl+u":
+		m.diffCursor = max(0, m.diffCursor-5)
+	case "ctrl+d":
+		m.diffCursor = min(len(lines)-1, m.diffCursor+5)
+	case "m", "a":
+		// Stage the file to a branch — same as the normal-mode assign action.
+		m.mode = modeNormal
+		return m.startAction(m.actionByID(actionStage))
+	case "d":
+		// Discard the file change.
+		m.mode = modeNormal
+		return m.startAction(m.actionByID(actionDiscard))
+	case "enter":
+		// On a +/- line, stage the file (file-level staging until hunk-level
+		// support is verified).
+		m.mode = modeNormal
+		return m.startAction(m.actionByID(actionStage))
+	}
+	return m, nil
+}
+
+// handleDiffMouse handles mouse events in the full-screen diff view. Wheel
+// up/down scrolls the diff body; click moves the cursor to the clicked row.
+func (m Model) handleDiffMouse(mouse tea.MouseMsg) (tea.Model, tea.Cmd) {
+	lines := m.diffBodyLines()
+	switch mouse.Button {
+	case tea.MouseButtonWheelUp:
+		if m.diffScroll > 0 {
+			m.diffScroll = max(0, m.diffScroll-3)
+			m.diffCursor = m.diffScroll
+		}
+		return m, nil
+	case tea.MouseButtonWheelDown:
+		maxScroll := max(0, len(lines)-1)
+		m.diffScroll = min(maxScroll, m.diffScroll+3)
+		m.diffCursor = min(len(lines)-1, m.diffScroll+3)
+		return m, nil
+	case tea.MouseButtonLeft:
+		if mouse.Action != tea.MouseActionPress {
+			return m, nil
+		}
+		// Click inside the bordered box: row 0 = top border, row 1 = header,
+		// row 2+ = body. Map Y to body line index.
+		bodyY := mouse.Y - 2 // border (1) + header (1)
+		if bodyY < 0 {
+			return m, nil
+		}
+		idx := m.diffScroll + bodyY
+		if idx >= 0 && idx < len(lines) {
+			m.diffCursor = idx
+		}
+		return m, nil
+	}
+	return m, nil
 }

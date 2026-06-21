@@ -425,10 +425,10 @@ func TestPreviewZoneDetection(t *testing.T) {
 	model.loading = false
 	model.width = 160
 	model.height = 40
-	// previewStripHeight(38) = clamp(38*0.3, 6, 14) = 11
-	// mainAreaHeight = 1 (top) + (38-11) = 28 — preview rows are 28..38
-	if !model.inPreviewZone(30) {
-		t.Fatalf("y=30 should be in preview zone")
+	// previewStripHeight(38) = clamp(38*0.22, 5, 10) = 8
+	// mainAreaHeight = 1 (top) + (38-8) = 31 — preview rows are 31..39
+	if !model.inPreviewZone(31) {
+		t.Fatalf("y=31 should be in preview zone")
 	}
 	if model.inPreviewZone(10) {
 		t.Fatalf("y=10 should NOT be in preview zone")

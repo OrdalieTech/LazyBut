@@ -10,23 +10,29 @@ const (
 )
 
 type lane struct {
-	Key           string
-	ID            string
-	Name          string
-	Kind          laneKind
-	Depth         int
-	Applied       bool
-	ChangeCount   int
-	CommitCount   int
-	UpstreamCount int    // commits available to pull from this branch's remote
-	PushStatus    string // raw branchStatus enum: nothingToPush / unpushedCommits / unpushedCommitsRequiringForce / completelyUnpushed / integrated
-	Ahead         *int
-	MergeClean    *bool
-	CIPending     int // counts from Branch.CI for inline check badges
-	CIPassing     int
-	CIFailing     int
-	CIPresent     bool
-	ReviewID      string // pull-request id parsed from branch.ReviewID
+	Key             string
+	ID              string
+	Name            string
+	Kind            laneKind
+	Depth           int
+	Applied         bool
+	ChangeCount     int
+	CommitCount     int
+	UpstreamCount   int    // commits available to pull from this branch's remote
+	PushStatus      string // raw branchStatus enum: nothingToPush / unpushedCommits / unpushedCommitsRequiringForce / completelyUnpushed / integrated
+	Ahead           *int
+	MergeClean      *bool
+	CIPending       int // counts from Branch.CI for inline check badges
+	CIPassing       int
+	CIFailing       int
+	CIPresent       bool
+	CIConclusion    string   // overall conclusion: success / failure / pending / ""
+	CIFailingTitles []string // individual failing check names
+	CIPendingTitles []string // individual pending check names
+	ReviewID        string   // pull-request id parsed from branch.ReviewID
+	ReviewURL       string   // PR URL from branch list reviews (when available)
+	LastCommitAt    string   // RFC3339 timestamp of the most recent commit (commits only)
+	LastAuthor      string   // author of the most recent commit (commits only)
 }
 
 type branchOption struct {
@@ -53,6 +59,7 @@ type contentItem struct {
 	Detail     string
 	Conflicted bool   // commits flagged as conflicted by GitButler
 	ReviewID   string // per-commit PR id when available
+	ReviewURL  string // PR URL when available (propagated from owning lane)
 	Hash       string // full commit SHA (commits only)
 	Author     string // commit author name (commits only)
 	Created    string // commit createdAt timestamp, raw (commits only)
@@ -71,6 +78,19 @@ func buildWorkspaceData(status *gitbutler.WorkspaceStatus, branches *gitbutler.B
 	data := workspaceData{Status: status, Branches: branches}
 	if status == nil {
 		return data
+	}
+
+	// Build a name → review URL map from branch list so we can attach the
+	// PR URL to each lane when the status only gives us the review ID.
+	reviewURLs := map[string]string{}
+	if branches != nil {
+		for _, stack := range branches.AppliedStacks {
+			for _, head := range stack.Heads {
+				for _, r := range head.Reviews {
+					reviewURLs[head.Name] = r.URL
+				}
+			}
+		}
 	}
 
 	data.Lanes = append(data.Lanes, lane{
@@ -106,12 +126,22 @@ func buildWorkspaceData(status *gitbutler.WorkspaceStatus, branches *gitbutler.B
 			}
 			if branch.CI != nil {
 				ln.CIPresent = true
+				ln.CIConclusion = branch.CI.OverallConclusion.String()
 				ln.CIPending = len(branch.CI.Pending)
 				ln.CIPassing = len(branch.CI.Passing)
 				ln.CIFailing = len(branch.CI.Failing)
+				ln.CIPendingTitles = branch.CI.Pending
+				ln.CIFailingTitles = branch.CI.Failing
 			}
 			if branch.ReviewID != nil {
 				ln.ReviewID = *branch.ReviewID
+			}
+			if url, ok := reviewURLs[branch.Name]; ok {
+				ln.ReviewURL = url
+			}
+			if len(branch.Commits) > 0 {
+				ln.LastCommitAt = branch.Commits[0].CreatedAt
+				ln.LastAuthor = branch.Commits[0].AuthorName
 			}
 			data.Lanes = append(data.Lanes, ln)
 		}
@@ -184,10 +214,10 @@ func (d workspaceData) ContentFor(index int) []contentItem {
 		}
 		items := changesToContent(stack.AssignedChanges)
 		for _, commit := range branch.Commits {
-			items = append(items, commitToContent(commit, contentCommit))
+			items = append(items, commitToContent(commit, contentCommit, selected.ReviewURL))
 		}
 		for _, commit := range branch.UpstreamCommits {
-			items = append(items, commitToContent(commit, contentUpstreamCommit))
+			items = append(items, commitToContent(commit, contentUpstreamCommit, selected.ReviewURL))
 		}
 		if len(items) == 0 {
 			items = append(items, contentItem{Kind: contentSummary, Label: selected.Name, Detail: "no assigned changes or commits"})
@@ -212,7 +242,7 @@ func (d workspaceData) findAppliedBranch(name string) (gitbutler.Stack, gitbutle
 	return gitbutler.Stack{}, gitbutler.Branch{}, false
 }
 
-func commitToContent(commit gitbutler.Commit, kind contentKind) contentItem {
+func commitToContent(commit gitbutler.Commit, kind contentKind, reviewURL string) contentItem {
 	label := commit.Message
 	if label == "" {
 		label = "(no commit message)"
@@ -231,6 +261,7 @@ func commitToContent(commit gitbutler.Commit, kind contentKind) contentItem {
 		Detail:     detail,
 		Conflicted: commit.Conflicted != nil && *commit.Conflicted,
 		ReviewID:   derefString(commit.ReviewID),
+		ReviewURL:  reviewURL,
 		Hash:       commit.CommitID,
 		Author:     commit.AuthorName,
 		Created:    commit.CreatedAt,

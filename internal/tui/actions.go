@@ -39,7 +39,7 @@ func (m Model) availableActions() []action {
 		{ID: actionAddBranch, Key: "+", Aliases: []string{"B"}, Label: "add branch"},
 		{ID: actionNewBranch, Key: "n", Label: "new branch", InputLabel: "branch name"},
 		{ID: actionPullCheck, Key: "u", Label: "check upstream update"},
-		{ID: actionPull, Key: "U", Label: "update from upstream", ConfirmText: m.upstreamUpdateConfirmText()},
+		{ID: actionPull, Key: "p", Label: "update from upstream", ConfirmText: m.upstreamUpdateConfirmText()},
 	}
 	actions = append(actions,
 		action{ID: actionUndo, Key: "z", Label: "undo last GitButler operation", Dangerous: true, ConfirmText: "Undo the last GitButler operation?"},
@@ -56,10 +56,11 @@ func (m Model) availableActions() []action {
 			action{ID: actionPush, Key: "P", Label: "push branch", ConfirmText: "Push the selected branch?"},
 			action{ID: actionPushDryRun, Key: "Y", Label: "push dry-run"},
 			action{ID: actionForcePush, Key: "F", Label: "force push branch", Dangerous: true, ConfirmText: "Force push the selected branch?"},
-			action{ID: actionNewPR, Key: "p", Label: "create PR"},
-			action{ID: actionNewDraftPR, Key: "ctrl+p", Label: "create draft PR"},
+			action{ID: actionNewPR, Key: "o", Label: "create PR"},
+			action{ID: actionNewDraftPR, Key: "O", Label: "create draft PR"},
 			action{ID: actionPRDraft, Key: "T", Label: "set PR draft", ConfirmText: "Mark the selected branch review as draft?"},
 			action{ID: actionPRReady, Key: "W", Label: "set PR ready", ConfirmText: "Mark the selected branch review as ready?"},
+			action{ID: actionCopyPRURL, Key: "ctrl+o", Label: "copy PR URL"},
 			action{ID: actionMerge, Key: "ctrl+m", Label: "merge branch into target", ConfirmText: "Merge selected branch into the target branch?"},
 			action{ID: actionDelete, Key: "D", Label: "delete branch", Dangerous: true, ConfirmText: "Delete this branch?"},
 			action{ID: actionMove, Key: "M", Label: "move selected branch/commit", InputLabel: "target branch, commit, or zz"},
@@ -88,7 +89,7 @@ func (m Model) availableActions() []action {
 
 	if isCommit {
 		actions = append(actions,
-			action{ID: actionUncommit, Key: "o", Label: "uncommit selected commit", Dangerous: true, ConfirmText: "Move the selected commit back to unassigned changes?"},
+			action{ID: actionUncommit, Key: "U", Label: "uncommit selected commit", Dangerous: true, ConfirmText: "Move the selected commit back to unassigned changes?"},
 			action{ID: actionSquash, Key: "Q", Label: "squash commits", ConfirmText: "Squash these commits? This rewrites history."},
 			action{ID: actionMove, Key: "M", Label: "move selected commit", InputLabel: "target branch or commit"},
 			action{ID: actionRub, Key: "b", Label: "rub selected commit", InputLabel: "target branch, commit, or zz"},

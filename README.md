@@ -121,10 +121,11 @@ go run ./cmd/lazybut -C /path/to/gitbutler/repo -snapshot 120x36
 - `D`: delete selected branch
 - `P`: push selected branch
 - `Y`: push dry-run
-- `p`: create PR
-- `ctrl+p`: create draft PR
+- `o`: create PR
+- `O`: create draft PR
 - `u`: non-mutating upstream check (`but pull --check`)
-- `U`: refresh upstream state; if updates exist, open the update workspace flow (`but pull`)
+- `p`: refresh upstream state; if updates exist, open the update workspace flow (`but pull`)
+- `U`: uncommit selected commit
 - `z`: undo last GitButler operation
 - `:`: action palette
 - `?`: help
@@ -133,7 +134,7 @@ go run ./cmd/lazybut -C /path/to/gitbutler/repo -snapshot 120x36
 
 LazyBut models GitButler desktop's "Update workspace" flow for the terminal:
 
-- `U` first refreshes GitButler state when no incoming update is currently known.
+- `p` first refreshes GitButler state when no incoming update is currently known.
 - If there is nothing to pull, it shows `no upstream update`.
 - If the target branch has incoming commits, it opens a navigable update modal.
 - `u` remains available for a non-mutating check before running the update.

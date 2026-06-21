@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -13,6 +14,16 @@ import (
 
 	"github.com/OrdalieTech/LazyBut/internal/gitbutler"
 )
+
+// hyperlink wraps text in an OSC 8 escape sequence so ctrl+click opens the URL
+// in supporting terminals (iTerm2, kitty, Alacritty, Windows Terminal, tmux).
+// The sequence is zero-width — lipgloss.Width and fit() already skip OSC runs.
+func hyperlink(text, url string) string {
+	if url == "" {
+		return text
+	}
+	return "\x1b]8;;" + url + "\x07" + text + "\x1b]8;;\x07"
+}
 
 var (
 	border = lipgloss.RoundedBorder()
@@ -125,47 +136,6 @@ const (
 // hopping around the cell like the thin ⠋⠙⠹ set did.
 var spinnerFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
 
-// loaderGrad colors the moving head of the indeterminate sweep bar: a hot gold
-// comet head fading back through amber into the dim track. All four shades stay
-// readable on light and dark terminals.
-var loaderGrad = []lipgloss.Color{
-	lipgloss.Color("226"), // comet head — bright gold
-	lipgloss.Color("220"),
-	lipgloss.Color("214"),
-	lipgloss.Color("208"), // tail
-}
-
-// loaderBar renders a fixed-width indeterminate progress sweep: a glowing head
-// bounces back and forth across a dim track. Fixed width matters — the
-// surrounding top-bar segments must not jitter as it animates. `frame` is the
-// shared UI tick counter so it advances on its own.
-func loaderBar(frame, width int) string {
-	if width < 1 {
-		return ""
-	}
-	if width == 1 {
-		return lipgloss.NewStyle().Foreground(loaderGrad[0]).Render("━")
-	}
-	period := 2 * (width - 1)
-	pos := ((frame % period) + period) % period
-	if pos >= width {
-		pos = period - pos // bounce back from the right edge
-	}
-	var b strings.Builder
-	for i := 0; i < width; i++ {
-		d := pos - i
-		if d < 0 {
-			d = -d
-		}
-		c := colDeep
-		if d < len(loaderGrad) {
-			c = loaderGrad[d]
-		}
-		b.WriteString(lipgloss.NewStyle().Foreground(c).Render("━"))
-	}
-	return b.String()
-}
-
 func (m Model) View() string {
 	if m.width == 0 {
 		return "loading lazybut..."
@@ -194,6 +164,8 @@ func (m Model) View() string {
 		return overlay(view, m.width, m.height, m.renderBranchPicker())
 	case modeTargetPicker:
 		return overlay(view, m.width, m.height, m.renderTargetPicker())
+	case modeDiff:
+		return m.renderDiffView()
 	case modeHelp:
 		return overlay(view, m.width, m.height, m.renderHelp())
 	default:
@@ -338,10 +310,10 @@ func fetchedAgo(raw *string) string {
 }
 
 // activityIndicator returns a vivid, light-mode-safe "busy" chip for the top
-// bar, or "" when idle. Initial/blocking loads read "working"; background
-// auto-refreshes read "syncing" — so the user always knows the workspace is
-// being re-fetched even while the UI stays interactive. Both route through
-// styleLoad (bold amber) so they pop on light and dark terminals alike.
+// bar, or "" when idle. User-initiated actions show their own label
+// ("pushing", "pulling", etc.); background auto-refreshes read "syncing".
+// Both route through styleLoad (bold amber) so they pop on light and dark
+// terminals alike.
 // syncIndicatorDelayFrames is how long a background sync must run before its
 // indicator appears (~630ms at the 90ms UI tick). Periodic auto-refreshes
 // almost always finish faster than this, so the bar no longer flashes on every
@@ -352,8 +324,12 @@ func (m Model) activityIndicator() string {
 	var label string
 	switch {
 	case m.loading:
-		// User-initiated / blocking work — surface immediately.
-		label = "working"
+		// User-initiated / blocking work — surface immediately with the
+		// action-specific label if we have one.
+		label = m.loadingLabel
+		if label == "" {
+			label = "working"
+		}
 	case m.autoRefreshInFlight:
 		if m.spinnerFrame-m.autoRefreshStartFrame < syncIndicatorDelayFrames {
 			return ""
@@ -362,10 +338,10 @@ func (m Model) activityIndicator() string {
 	default:
 		return ""
 	}
-	// Steady ball spinner + fixed-width glowing sweep. Both are constant width,
-	// so the chips that follow don't shuffle frame to frame.
+	// Steady ball spinner — constant width so the chips that follow don't
+	// shuffle frame to frame.
 	return styleLoad.Render(spinnerFrame(m.spinnerFrame)) + " " +
-		styleLoad.Render(label) + " " + loaderBar(m.spinnerFrame, 7)
+		styleLoad.Render(label)
 }
 
 func spinnerFrame(frame int) string {
@@ -405,14 +381,14 @@ func previewStripHeight(bodyHeight int) int {
 	if bodyHeight < 14 {
 		return 0
 	}
-	// The kanban columns usually have vertical slack, so give the diff a
-	// genuinely useful strip rather than a thin sliver.
-	want := bodyHeight * 38 / 100
-	if want < 9 {
-		want = 9
+	// Keep the preview strip compact so the preview panel sits close to the
+	// main workspace, similar to how kanban columns sit side-by-side.
+	want := bodyHeight * 22 / 100
+	if want < 5 {
+		want = 5
 	}
-	if want > 18 {
-		want = 18
+	if want > 10 {
+		want = 10
 	}
 	// Never starve the columns: keep at least 8 rows for the main area.
 	if bodyHeight-want < 8 {
@@ -575,10 +551,27 @@ func (m Model) renderKanbanColumn(lane lane, index, width, height int) string {
 			}
 		}
 	}
+	// Reserve space for the pinned status footer (divider + footer row).
+	footer := m.laneFooterLine(lane, innerW)
+	footerRows := 0
+	if footer != "" {
+		footerRows = 2
+	}
+	availRows := max(1, contentHeight(height)-1-footerRows)
+	windowed := windowRows(rows, m.kanbanColumnCursor(index), availRows)
+	// Pad content to fill the available space so the footer pins to the
+	// bottom of the column instead of floating up when content is short.
+	bodyLines := make([]string, 0, availRows+footerRows)
+	bodyLines = append(bodyLines, windowed...)
+	for len(bodyLines) < availRows {
+		bodyLines = append(bodyLines, "")
+	}
+	if footer != "" {
+		bodyLines = append(bodyLines, styleFaint.Render(strings.Repeat("─", innerW)), footer)
+	}
 	title := m.laneKanbanTitle(lane, index)
-	body := strings.Join(windowRows(rows, m.kanbanColumnCursor(index), max(1, contentHeight(height)-1)), "\n")
 	focused := index == m.laneCursor
-	return boxWithStyle(title, body, width, height, laneBoxStyle(lane, focused))
+	return boxWithStyle(title, strings.Join(bodyLines, "\n"), width, height, laneBoxStyle(lane, focused))
 }
 
 func isFileCommitBoundary(items []contentItem, idx int) bool {
@@ -679,7 +672,7 @@ func renderItemRow(item contentItem, isSelected, isCursor, focused bool, width i
 	}
 	out := markStyled + itemGlyphStyle(item, glyph) + " " + itemIDStyle(item).Render(id) + " " + labelStyled
 	if prSuffix != "" {
-		out += " " + styleHotKey.Render(strings.TrimSpace(prSuffix))
+		out += " " + styleHotKey.Render(hyperlink(strings.TrimSpace(prSuffix), item.ReviewURL))
 	}
 	return fit(out, width)
 }
@@ -860,8 +853,23 @@ func (m Model) renderLanes(width, height int) string {
 func (m Model) renderNarrow(width, height int) string {
 	innerW := contentWidth(width)
 	strip := m.laneTabStrip(innerW)
-	rows := m.contentLines(innerW, max(1, contentHeight(height)-1))
-	return boxWithStyle(strip, strings.Join(rows, "\n"), width, height, styleFocus)
+	selectedLane, _ := m.selectedLane()
+	footer := m.laneFooterLine(selectedLane, innerW)
+	footerRows := 0
+	if footer != "" {
+		footerRows = 2
+	}
+	availRows := max(1, contentHeight(height)-1-footerRows)
+	rows := m.contentLines(innerW, availRows)
+	bodyLines := make([]string, 0, availRows+footerRows)
+	bodyLines = append(bodyLines, rows...)
+	for len(bodyLines) < availRows {
+		bodyLines = append(bodyLines, "")
+	}
+	if footer != "" {
+		bodyLines = append(bodyLines, styleFaint.Render(strings.Repeat("─", innerW)), footer)
+	}
+	return boxWithStyle(strip, strings.Join(bodyLines, "\n"), width, height, styleFocus)
 }
 
 // laneTabStrip renders the branches as a horizontal, windowed tab bar centered
@@ -926,7 +934,7 @@ func (m Model) laneTabStrip(width int) string {
 }
 
 func (m Model) renderPreview(width, height int) string {
-	rows := m.previewLines(max(1, width-4), max(1, height-3))
+	rows := m.previewLines(contentWidth(width), contentHeight(height))
 	return box(m.previewTitle(m.focus == panelPreview), strings.Join(rows, "\n"), width, height, m.focus == panelPreview)
 }
 
@@ -972,10 +980,8 @@ func (m Model) laneLines(width, height int) []string {
 }
 
 func (m Model) loadingLines(width, height int) []string {
-	barW := min(28, max(6, width-2))
 	return fitStateLines([]string{
 		styleLoad.Render(spinnerFrame(m.spinnerFrame)) + "  " + styleLoad.Render("loading GitButler status"),
-		loaderBar(m.spinnerFrame, barW),
 		"",
 		styleDim.Render("LazyBut is open; `but status -j` is running in the background."),
 		styleDim.Render("Huge repositories can take a while; the UI should stay responsive."),
@@ -1142,29 +1148,17 @@ func syncChipPlain(lane lane) string {
 
 func laneMetaLine(lane lane, width int) string {
 	parts := []string{}
-	// Compact "Nf · Nc" counts (instead of "N files · N commits") leave room for
-	// the higher-signal CI and PR chips, which used to get truncated away.
 	if lane.ChangeCount > 0 {
 		parts = append(parts, styleDim.Render(fmt.Sprintf("%df", lane.ChangeCount)))
 	}
 	if lane.CommitCount > 0 {
 		parts = append(parts, styleDim.Render(fmt.Sprintf("%dc", lane.CommitCount)))
 	}
-	if lane.MergeClean != nil && !*lane.MergeClean {
-		parts = append(parts, styleErr.Render(glyphConflict+" conflict"))
-	}
-	if chip := ciChip(lane); chip != "" {
-		parts = append(parts, chip)
-	}
-	if lane.ReviewID != "" {
-		parts = append(parts, styleHotKey.Render("PR "+cleanReviewID(lane.ReviewID)))
-	}
 	if len(parts) == 0 {
 		return styleDim.Render(fit("up to date", width))
 	}
 	sep := styleDim.Render(" " + sepDot + " ")
-	joined := strings.Join(parts, sep)
-	return fit(joined, width)
+	return fit(strings.Join(parts, sep), width)
 }
 
 // ciChip renders a compact CI status badge using Branch.CI counts. Pending in
@@ -1187,6 +1181,191 @@ func ciChip(lane lane) string {
 		return styleDim.Render("CI ?")
 	}
 	return strings.Join(parts, " ")
+}
+
+// laneFooterLine renders the pinned status footer at the bottom of a kanban
+// column. When width is tight, items are kept in priority order (conflict >
+// failing CI > pending CI > push needed > pull needed > passing CI > PR >
+// synced) and the least important are dropped first so nothing clips.
+func (m Model) laneFooterLine(lane lane, width int) string {
+	if lane.Kind != laneAppliedBranch {
+		return ""
+	}
+
+	type item struct {
+		full     string // styled, readable form
+		compact  string // shorter fallback when space is tight
+		priority int    // lower = more important (kept first)
+	}
+
+	var items []item
+
+	// Conflict — highest priority, blocks all work.
+	if lane.MergeClean != nil && !*lane.MergeClean {
+		items = append(items, item{
+			full:     styleErr.Render(glyphConflict + " conflict"),
+			compact:  styleErr.Render(glyphConflict),
+			priority: 0,
+		})
+	}
+
+	// CI conclusion.
+	if lane.CIPresent {
+		switch lane.CIConclusion {
+		case "failure":
+			items = append(items, item{
+				full:     styleErr.Render(fmt.Sprintf("%s CI %d", glyphCross, lane.CIFailing)),
+				compact:  styleErr.Render(glyphCross + " CI"),
+				priority: 1,
+			})
+		case "pending":
+			items = append(items, item{
+				full:     styleLoad.Render(spinnerFrame(m.spinnerFrame) + " CI…"),
+				compact:  styleLoad.Render("…CI"),
+				priority: 2,
+			})
+		case "success":
+			if lane.CIPassing > 0 {
+				items = append(items, item{
+					full:     styleOk.Render(fmt.Sprintf("%s CI %d", glyphCheck, lane.CIPassing)),
+					compact:  styleOk.Render(glyphCheck + " CI"),
+					priority: 5,
+				})
+			} else {
+				items = append(items, item{
+					full:     styleOk.Render(glyphCheck + " CI"),
+					compact:  styleOk.Render(glyphCheck),
+					priority: 5,
+				})
+			}
+		default:
+			items = append(items, item{
+				full:     styleDim.Render("CI ?"),
+				compact:  styleDim.Render("CI?"),
+				priority: 5,
+			})
+		}
+	}
+
+	// Sync state.
+	behind, ahead, forceRequired, _, integrated := syncSummary(lane)
+	if integrated {
+		items = append(items, item{
+			full:     styleMerged.Render(glyphMerged + " merged"),
+			compact:  styleMerged.Render(glyphMerged),
+			priority: 7,
+		})
+	} else {
+		if ahead > 0 {
+			text := fmt.Sprintf("%s%d", glyphAhead, ahead)
+			if forceRequired {
+				text += "!"
+				items = append(items, item{
+					full:     styleErr.Render(text),
+					compact:  styleErr.Render(text),
+					priority: 3,
+				})
+			} else {
+				items = append(items, item{
+					full:     styleWarn.Render(text),
+					compact:  styleWarn.Render(text),
+					priority: 3,
+				})
+			}
+		}
+		if behind > 0 {
+			items = append(items, item{
+				full:     styleWarn.Render(fmt.Sprintf("%s%d", glyphBehind, behind)),
+				compact:  styleWarn.Render(fmt.Sprintf("%s%d", glyphBehind, behind)),
+				priority: 4,
+			})
+		}
+		if ahead == 0 && behind == 0 {
+			items = append(items, item{
+				full:     styleOk.Render(glyphCheck + " synced"),
+				compact:  styleOk.Render(glyphCheck),
+				priority: 7,
+			})
+		}
+	}
+
+	// PR indicator — informational, lowest priority.
+	if lane.ReviewID != "" {
+		items = append(items, item{
+			full:     styleHotKey.Render("PR " + cleanReviewID(lane.ReviewID)),
+			compact:  styleHotKey.Render(cleanReviewID(lane.ReviewID)),
+			priority: 6,
+		})
+	}
+
+	// Last commit age — gives quiet branches some context.
+	if age := compactAgo(lane.LastCommitAt); age != "" {
+		items = append(items, item{
+			full:     styleDim.Render(age),
+			compact:  styleDim.Render(age),
+			priority: 8,
+		})
+	}
+
+	if len(items) == 0 {
+		return ""
+	}
+
+	// Sort by priority (most important first).
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].priority < items[j].priority
+	})
+
+	sep := styleDim.Render(" " + sepDot + " ")
+	sepW := lipgloss.Width(sep)
+
+	// Try to fit items using their full form, falling back to compact for
+	// the lowest-priority items that don't fit.
+	useCompact := make([]bool, len(items))
+	for {
+		var selected []string
+		totalW := 0
+		for i, it := range items {
+			text := it.full
+			if useCompact[i] {
+				text = it.compact
+			}
+			w := lipgloss.Width(text)
+			need := w
+			if len(selected) > 0 {
+				need += sepW
+			}
+			if totalW+need > width {
+				continue
+			}
+			selected = append(selected, text)
+			totalW += need
+		}
+		if len(selected) == len(items) || width <= 0 {
+			if len(selected) == 0 {
+				// Last resort: show the single most important item, truncated.
+				top := items[0].compact
+				if lipgloss.Width(top) > width {
+					return fit(top, width)
+				}
+				return top
+			}
+			return strings.Join(selected, sep)
+		}
+		// Promote the lowest-priority un-compact item to compact and retry.
+		promoted := false
+		for i := len(items) - 1; i >= 0; i-- {
+			if !useCompact[i] {
+				useCompact[i] = true
+				promoted = true
+				break
+			}
+		}
+		if !promoted {
+			// Everything is already compact; just join what fits.
+			return strings.Join(selected, sep)
+		}
+	}
 }
 
 // cleanReviewID strips parentheses that GitButler sometimes wraps PR ids in
@@ -1237,7 +1416,10 @@ func (m Model) formatContentLine(item contentItem, idx, width int) string {
 	return renderItemRow(item, m.selected[item.ID], isCursor, m.focus == panelContents, width)
 }
 
-func (m Model) previewLines(width, height int) []string {
+// previewRawRows returns the full list of preview rows (header + blank +
+// body) without windowing, so callers can compute total height for clamping
+// and scroll indicators.
+func (m Model) previewRawRows(width int) []string {
 	header := m.previewHeaderRows(width)
 	body := m.previewBodyRows(width)
 	rows := append([]string{}, header...)
@@ -1248,7 +1430,11 @@ func (m Model) previewLines(width, height int) []string {
 	if len(rows) == 0 {
 		return []string{styleDim.Render("select an item to preview")}
 	}
-	return windowRows(rows, m.previewScroll, height)
+	return rows
+}
+
+func (m Model) previewLines(width, height int) []string {
+	return windowRows(m.previewRawRows(width), m.previewScroll, height)
 }
 
 // previewHeaderRows builds the always-visible identity card for the focused
@@ -1311,7 +1497,7 @@ func previewFileHeader(item contentItem, width int) []string {
 		parts = append(parts, styleDim.Render(t))
 	}
 	if item.ReviewID != "" {
-		parts = append(parts, styleHotKey.Render(cleanReviewID(item.ReviewID)))
+		parts = append(parts, styleHotKey.Render(hyperlink(cleanReviewID(item.ReviewID), item.ReviewURL)))
 	}
 	row1 := fit(strings.Join(parts, " "), width)
 	row2 := previewPathRow(item.Label, item.Detail, width)
@@ -1477,31 +1663,72 @@ type hint struct {
 	label string
 }
 
+// contextActions returns the most relevant actions for the current selection,
+// prioritised by context. The hotbar shows these (left to right, most relevant
+// first) before the fixed meta keys (actions/filter/help/quit). When the
+// terminal is narrow, the least-relevant actions are dropped first.
 func (m Model) contextActions() []action {
 	all := m.availableActions()
-	pinned := []actionID{
-		actionRefresh,
-		actionInstallGitButler,
-		actionSetup,
-		actionSetupInit,
-		actionAddBranch,
-		actionNewBranch,
-		actionStage,
-		actionCommit,
-		actionAmend,
-		actionDiscard,
-		actionPush,
-		actionPull,
-		actionUndo,
-	}
 	byID := map[actionID]action{}
 	for _, a := range all {
 		byID[a.ID] = a
 	}
+
+	// Context-dependent priority groups. Each group lists action IDs in
+	// priority order; the first matching group is used.
+	lane, hasLane := m.selectedLane()
+	item, hasItem := m.selectedContent()
+
+	var groups [][]actionID
+
+	// Bootstrap state — only refresh + setup actions.
+	if m.data.Status == nil {
+		groups = append(groups, []actionID{
+			actionRefresh, actionInstallGitButler, actionSetup, actionSetupInit,
+		})
+	}
+
+	// Change selected — staging/discard/amend are the core file actions.
+	if hasItem && item.Kind == contentChange && item.ID != "" {
+		groups = append(groups, []actionID{
+			actionStage, actionDiscard, actionAmend, actionCommit,
+		})
+	}
+
+	// Commit selected — uncommit/squash/move are the core commit actions.
+	if hasItem && (item.Kind == contentCommit || item.Kind == contentUpstreamCommit) && item.ID != "" {
+		groups = append(groups, []actionID{
+			actionUncommit, actionSquash, actionMove, actionAmend,
+		})
+	}
+
+	// Branch selected — push/pull/PR/delete are the core branch actions.
+	if hasLane && lane.Kind == laneAppliedBranch {
+		groups = append(groups, []actionID{
+			actionPush, actionPull, actionNewPR, actionCommit, actionDelete,
+		})
+	}
+
+	// Always-present workspace actions (lower priority).
+	groups = append(groups, []actionID{
+		actionRefresh, actionAddBranch, actionNewBranch, actionUndo,
+	})
+
+	// Flatten groups, dedup by ID (first occurrence wins), cap at 6.
+	seen := map[actionID]bool{}
 	out := []action{}
-	for _, id := range pinned {
-		if a, ok := byID[id]; ok && a.Key != "" {
-			out = append(out, a)
+	for _, group := range groups {
+		for _, id := range group {
+			if len(out) >= 6 {
+				break
+			}
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			if a, ok := byID[id]; ok && a.Key != "" {
+				out = append(out, a)
+			}
 		}
 	}
 	return out
@@ -1571,6 +1798,8 @@ func actionShortLabel(a action) string {
 		return "PR draft"
 	case actionPRReady:
 		return "PR ready"
+	case actionCopyPRURL:
+		return "copy URL"
 	case actionResolveStatus:
 		return "resolve"
 	case actionResolveFinish:
@@ -1829,6 +2058,119 @@ func firstLine(s string) string {
 	return s
 }
 
+// renderDiffView renders the full-screen diff mode inside a bordered frame:
+// a header bar with the file name and change ID, a scrollable diff body with
+// a line cursor, and a footer with the available actions.
+func (m Model) renderDiffView() string {
+	width := m.width
+	height := m.height
+
+	item, ok := m.selectedContent()
+	if !ok || m.preview == "" {
+		return styleFocus.Width(contentWidth(width)).Height(contentHeight(height)).Render(
+			styleAccent.Render("diff") + "\n\n" +
+				styleDim.Render("No diff content. Press esc to go back."),
+		)
+	}
+
+	innerW := contentWidth(width)
+	innerH := contentHeight(height)
+
+	// Header: file path + change type + change ID.
+	var header string
+	switch item.Kind {
+	case contentChange:
+		header = fileChangeStyle(item.Detail).Render(glyphFile) + " " +
+			styleIDDim.Render(displayItemID(item)) + " " +
+			styleDim.Render(item.Detail) + " " +
+			styleFileName.Render(item.Label)
+	default:
+		header = styleTitle.Render(firstLine(item.Label))
+	}
+
+	// Body: the diff lines with a cursor highlight on the current row.
+	lines := m.diffBodyLines()
+	bodyH := innerH - 2 // header (1) + footer (1)
+	if bodyH < 1 {
+		bodyH = 1
+	}
+
+	// Clamp cursor.
+	if m.diffCursor >= len(lines) {
+		m.diffCursor = max(0, len(lines)-1)
+	}
+
+	// Window the lines around the cursor, keeping it in view.
+	scroll := m.diffScroll
+	if m.diffCursor < scroll {
+		scroll = m.diffCursor
+	}
+	if m.diffCursor >= scroll+bodyH {
+		scroll = m.diffCursor - bodyH + 1
+	}
+	if scroll < 0 {
+		scroll = 0
+	}
+	maxScroll := max(0, len(lines)-bodyH)
+	if scroll > maxScroll {
+		scroll = maxScroll
+	}
+	m.diffScroll = scroll
+
+	bodyLines := make([]string, 0, bodyH)
+	for i := scroll; i < len(lines) && len(bodyLines) < bodyH; i++ {
+		line := lines[i]
+		if i == m.diffCursor {
+			padded := padRight(stripAnsi(line), innerW)
+			bodyLines = append(bodyLines, styleSelectedRow.Render(padded))
+		} else {
+			bodyLines = append(bodyLines, fit(line, innerW))
+		}
+	}
+	for len(bodyLines) < bodyH {
+		bodyLines = append(bodyLines, "")
+	}
+
+	// Footer: action hints + scroll position.
+	pos := ""
+	if len(lines) > bodyH {
+		pct := scroll * 100 / max(1, maxScroll)
+		pos = styleDim.Render(fmt.Sprintf(" %d%%", pct))
+	}
+	footer := strings.Join([]string{
+		styleHotKey.Render("j/k") + " " + styleHotLabel.Render("navigate"),
+		styleHotKey.Render("m") + " " + styleHotLabel.Render("assign"),
+		styleHotKey.Render("d") + " " + styleHotLabel.Render("discard"),
+		styleHotKey.Render("esc") + " " + styleHotLabel.Render("back"),
+	}, styleDim.Render(" · ")) + pos
+
+	allLines := append([]string{fit(header, innerW)}, bodyLines...)
+	allLines = append(allLines, fit(footer, innerW))
+
+	return styleFocus.Width(innerW).Height(innerH).Render(strings.Join(allLines, "\n"))
+}
+
+// stripAnsi removes ANSI escape sequences from a string, returning the plain
+// text. Used so the cursor highlight can pad the visible width correctly.
+func stripAnsi(s string) string {
+	var b strings.Builder
+	inEscape := false
+	for _, r := range s {
+		if r == '\x1b' {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if r == 'm' || r == '\x07' {
+				inEscape = false
+			}
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 func compactAgo(raw string) string {
 	if raw == "" {
 		return ""
@@ -2005,7 +2347,8 @@ func (m Model) renderHelp() string {
 		"",
 		styleDim.Render("Workspace"),
 		"  " + styleHotLabel.Render("kanban shows zz + active branches; ") + styleHotKey.Render("+") + " " + styleHotLabel.Render("or") + " " + styleHotKey.Render("B") + " " + styleHotLabel.Render("opens inactive branches"),
-		"  " + styleHotKey.Render("u") + " " + styleHotLabel.Render("checks upstream update; ") + styleHotKey.Render("U") + " " + styleHotLabel.Render("updates/rebases all applied branches"),
+		"  " + styleHotKey.Render("u") + " " + styleHotLabel.Render("checks upstream update; ") + styleHotKey.Render("p") + " " + styleHotLabel.Render("updates/rebases all applied branches"),
+		"  " + styleHotKey.Render("o") + " " + styleHotLabel.Render("create PR; ") + styleHotKey.Render("O") + " " + styleHotLabel.Render("create draft PR; ") + styleHotKey.Render("U") + " " + styleHotLabel.Render("uncommit; ") + styleHotKey.Render("ctrl+o") + " " + styleHotLabel.Render("copy PR URL"),
 		"",
 		styleDim.Render("Actions"),
 		"  " + styleHotKey.Render(":") + " " + styleHotLabel.Render("action palette") + "   " + styleHotKey.Render("space/v") + " " + styleHotLabel.Render("select"),
@@ -2024,13 +2367,11 @@ func (m Model) laneKanbanTitle(lane lane, index int) string {
 	if index == m.laneCursor {
 		prefix = styleAccent.Render("▸ ")
 	}
-	// For zz keep the workspace badge as the lead; for applied branches the
-	// sync chip stands in for the redundant "on" tag.
+	// For zz keep the workspace badge as the lead; applied branches just show
+	// their name — sync state lives in the column footer now.
 	var lead string
 	if lane.Kind == laneUnassigned {
 		lead = styleBadgeZZ.Render(laneBadgeText(lane))
-	} else {
-		lead = syncChip(lane)
 	}
 	parts := prefix
 	if lead != "" {
@@ -2079,7 +2420,7 @@ func syncChip(lane lane) string {
 }
 
 func formatSyncChip(lane lane, styled bool) string {
-	behind, ahead, forceRequired, synced, integrated := syncSummary(lane)
+	behind, ahead, forceRequired, _, integrated := syncSummary(lane)
 	style := func(s lipgloss.Style, text string) string {
 		if styled {
 			return s.Render(text)
@@ -2102,8 +2443,8 @@ func formatSyncChip(lane lane, styled bool) string {
 			parts = append(parts, style(styleWarn, text))
 		}
 	}
-	if len(parts) == 0 && synced {
-		return style(styleOk, glyphCheck)
+	if len(parts) == 0 {
+		return styleOk.Render(glyphCheck + " synced")
 	}
 	return strings.Join(parts, " ")
 }
