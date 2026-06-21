@@ -790,6 +790,35 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 	}
 }
 
+func TestPushSetsContextualLoadingState(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	model.data = buildWorkspaceData(loadFixtureStatus(t), loadFixtureBranches(t))
+	model.laneCursor = 1
+
+	nextModel, cmd := model.execute(action{ID: actionPush}, "")
+	if cmd == nil {
+		t.Fatal("expected push command")
+	}
+	next := nextModel.(Model)
+	if !next.loading || next.loadingAction != actionPush || next.loadingBranch != "feature/ui" {
+		t.Fatalf("loading context = loading:%v action:%q branch:%q", next.loading, next.loadingAction, next.loadingBranch)
+	}
+}
+
+func TestPullSetsContextualLoadingState(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	model.data = buildWorkspaceData(loadFixtureStatus(t), loadFixtureBranches(t))
+
+	nextModel, cmd := model.execute(action{ID: actionPull}, "")
+	if cmd == nil {
+		t.Fatal("expected pull command")
+	}
+	next := nextModel.(Model)
+	if !next.loading || next.loadingAction != actionPull || next.loadingBranch != "" {
+		t.Fatalf("loading context = loading:%v action:%q branch:%q", next.loading, next.loadingAction, next.loadingBranch)
+	}
+}
+
 func TestUpstreamUpdateSummaryAndConflictToast(t *testing.T) {
 	model := newModel(gitbutler.NewClient(".", nil))
 	model.data = buildWorkspaceData(loadFixtureStatus(t), loadFixtureBranches(t))

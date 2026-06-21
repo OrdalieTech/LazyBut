@@ -116,6 +116,8 @@ type Model struct {
 	data          workspaceData
 	loading       bool
 	loadingLabel  string // e.g. "pushing", "pulling", shown in the activity indicator
+	loadingAction actionID
+	loadingBranch string
 	err           error
 	toast         string
 	toastKind     toastKind
@@ -1564,17 +1566,17 @@ func (m Model) execute(action action, input string) (tea.Model, tea.Cmd) {
 			return formatPullCheckOutput(summary, out), nil
 		})
 	case actionPull:
-		return m.startLoading("pulling"), m.mutationCmd("updated from upstream", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoadingFor("pulling", actionPull, ""), m.mutationCmd("updated from upstream", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Pull(ctx)
 		})
 	case actionPush:
-		return m.startLoading("pushing"), m.mutationCmd("pushed", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoadingFor("pushing", actionPush, branchRef), m.mutationCmd("pushed", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Push(ctx, branchRef, false)
 		})
 	case actionPushDryRun:
 		return m, m.textCmd("message", func() (string, error) { return m.client.PushDryRun(ctx, branchRef) })
 	case actionForcePush:
-		return m.startLoading("force pushing"), m.mutationCmd("force pushed", func() (*gitbutler.WorkspaceStatus, error) {
+		return m.startLoadingFor("force pushing", actionForcePush, branchRef), m.mutationCmd("force pushed", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Push(ctx, branchRef, true)
 		})
 	case actionNewPR:
@@ -2023,8 +2025,14 @@ func (m *Model) restoreCursors(laneKey, contentID string) {
 }
 
 func (m Model) startLoading(label string) Model {
+	return m.startLoadingFor(label, "", "")
+}
+
+func (m Model) startLoadingFor(label string, action actionID, branch string) Model {
 	m.loading = true
 	m.loadingLabel = label
+	m.loadingAction = action
+	m.loadingBranch = branch
 	m.err = nil
 	// Keep an existing toast visible — don't blank user feedback when a follow-up
 	// refresh kicks off automatically.
@@ -2034,6 +2042,8 @@ func (m Model) startLoading(label string) Model {
 func (m Model) stopLoading() Model {
 	m.loading = false
 	m.loadingLabel = ""
+	m.loadingAction = ""
+	m.loadingBranch = ""
 	return m
 }
 

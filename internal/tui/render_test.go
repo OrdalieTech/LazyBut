@@ -322,6 +322,88 @@ func TestSyncChipShapes(t *testing.T) {
 	}
 }
 
+func TestLaneFooterShowsPushLoadingInPlaceOfAheadArrow(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	model.loading = true
+	model.loadingAction = actionPush
+	model.loadingBranch = "feature/ui"
+	model.spinnerFrame = 0
+
+	lane := lane{Kind: laneAppliedBranch, Name: "feature/ui", PushStatus: "unpushedCommits", CommitCount: 2}
+	footer := model.laneFooterLine(lane, 80)
+	if !strings.Contains(footer, "pushing") {
+		t.Fatalf("footer should show push loading state: %q", footer)
+	}
+	if strings.Contains(footer, "↑2") {
+		t.Fatalf("footer should replace ahead arrow while pushing: %q", footer)
+	}
+}
+
+func TestLaneFooterKeepsAheadArrowForNonTargetPush(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	model.loading = true
+	model.loadingAction = actionPush
+	model.loadingBranch = "feature/api"
+
+	lane := lane{Kind: laneAppliedBranch, Name: "feature/ui", PushStatus: "unpushedCommits", CommitCount: 2}
+	footer := model.laneFooterLine(lane, 80)
+	if strings.Contains(footer, "pushing") {
+		t.Fatalf("footer should not show push loading state for another branch: %q", footer)
+	}
+	if !strings.Contains(footer, "↑2") {
+		t.Fatalf("footer should keep ahead arrow for another branch: %q", footer)
+	}
+}
+
+func TestLaneFooterShowsPushLoadingWithoutAheadArrow(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	model.loading = true
+	model.loadingAction = actionPush
+	model.loadingBranch = "feature/ui"
+	model.spinnerFrame = 0
+
+	lane := lane{Kind: laneAppliedBranch, Name: "feature/ui", PushStatus: "nothingToPush"}
+	footer := model.laneFooterLine(lane, 80)
+	if !strings.Contains(footer, "pushing") {
+		t.Fatalf("footer should show push loading state without ahead count: %q", footer)
+	}
+	if strings.Contains(footer, "synced") {
+		t.Fatalf("footer should replace synced state while pushing: %q", footer)
+	}
+}
+
+func TestLaneFooterShowsPullLoadingInPlaceOfBehindArrow(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	model.loading = true
+	model.loadingAction = actionPull
+	model.spinnerFrame = 0
+
+	lane := lane{Kind: laneAppliedBranch, Name: "feature/ui", PushStatus: "nothingToPush", UpstreamCount: 3}
+	footer := model.laneFooterLine(lane, 80)
+	if !strings.Contains(footer, "pulling") {
+		t.Fatalf("footer should show pull loading state: %q", footer)
+	}
+	if strings.Contains(footer, "↓3") {
+		t.Fatalf("footer should replace behind arrow while pulling: %q", footer)
+	}
+}
+
+func TestLaneFooterShowsPullLoadingWithoutBehindArrow(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	model.loading = true
+	model.loadingAction = actionPull
+	model.spinnerFrame = 0
+
+	lane := lane{Kind: laneAppliedBranch, Name: "feature/ui", PushStatus: "nothingToPush"}
+	footer := model.laneFooterLine(lane, 80)
+	if !strings.Contains(footer, "pulling") {
+		t.Fatalf("footer should show pull loading state without behind count: %q", footer)
+	}
+	if strings.Contains(footer, "synced") {
+		t.Fatalf("footer should replace synced state while pulling: %q", footer)
+	}
+}
+
 func TestUpstreamConfirmMirrorsGitButlerDialogShape(t *testing.T) {
 	model := newModel(gitbutler.NewClient(".", nil))
 	model.data = buildWorkspaceData(loadFixtureStatus(t), loadFixtureBranches(t))

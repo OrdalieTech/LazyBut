@@ -1249,14 +1249,23 @@ func (m Model) laneFooterLine(lane lane, width int) string {
 
 	// Sync state.
 	behind, ahead, forceRequired, _, integrated := syncSummary(lane)
-	if integrated {
+	pushing := m.isLanePushLoading(lane)
+	pulling := m.isLanePullLoading(lane)
+	if integrated && !pushing && !pulling {
 		items = append(items, item{
 			full:     styleMerged.Render(glyphMerged + " merged"),
 			compact:  styleMerged.Render(glyphMerged),
 			priority: 7,
 		})
 	} else {
-		if ahead > 0 {
+		if pushing {
+			label := firstNonEmpty(m.loadingLabel, "pushing")
+			items = append(items, item{
+				full:     styleLoad.Render(spinnerFrame(m.spinnerFrame) + " " + label),
+				compact:  styleLoad.Render(spinnerFrame(m.spinnerFrame)),
+				priority: 3,
+			})
+		} else if ahead > 0 {
 			text := fmt.Sprintf("%s%d", glyphAhead, ahead)
 			if forceRequired {
 				text += "!"
@@ -1273,14 +1282,21 @@ func (m Model) laneFooterLine(lane lane, width int) string {
 				})
 			}
 		}
-		if behind > 0 {
+		if pulling {
+			label := firstNonEmpty(m.loadingLabel, "pulling")
+			items = append(items, item{
+				full:     styleLoad.Render(spinnerFrame(m.spinnerFrame) + " " + label),
+				compact:  styleLoad.Render(spinnerFrame(m.spinnerFrame)),
+				priority: 4,
+			})
+		} else if behind > 0 {
 			items = append(items, item{
 				full:     styleWarn.Render(fmt.Sprintf("%s%d", glyphBehind, behind)),
 				compact:  styleWarn.Render(fmt.Sprintf("%s%d", glyphBehind, behind)),
 				priority: 4,
 			})
 		}
-		if ahead == 0 && behind == 0 {
+		if !pushing && !pulling && ahead == 0 && behind == 0 {
 			items = append(items, item{
 				full:     styleOk.Render(glyphCheck + " synced"),
 				compact:  styleOk.Render(glyphCheck),
@@ -1366,6 +1382,23 @@ func (m Model) laneFooterLine(lane lane, width int) string {
 			return strings.Join(selected, sep)
 		}
 	}
+}
+
+func (m Model) isLanePushLoading(lane lane) bool {
+	if !m.loading || lane.Kind != laneAppliedBranch {
+		return false
+	}
+	if m.loadingAction != actionPush && m.loadingAction != actionForcePush {
+		return false
+	}
+	return m.loadingBranch == "" || m.loadingBranch == lane.Name || m.loadingBranch == lane.ID || m.loadingBranch == lane.Key
+}
+
+func (m Model) isLanePullLoading(lane lane) bool {
+	if !m.loading || lane.Kind != laneAppliedBranch {
+		return false
+	}
+	return m.loadingAction == actionPull
 }
 
 // cleanReviewID strips parentheses that GitButler sometimes wraps PR ids in
