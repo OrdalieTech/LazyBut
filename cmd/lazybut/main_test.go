@@ -54,8 +54,8 @@ func TestSelfUpdateCommandRejectsEmptyRef(t *testing.T) {
 	}
 }
 
-func TestSelfUpdateUsesDirectProxyForMovingRefs(t *testing.T) {
-	for _, ref := range []string{"main", "feature/test"} {
+func TestSelfUpdateUsesDirectProxyForLatestAndMovingRefs(t *testing.T) {
+	for _, ref := range []string{"latest", "main", "feature/test"} {
 		env := selfUpdateEnv(ref)
 		if len(env) != 1 || env[0] != "GOPROXY=direct" {
 			t.Fatalf("selfUpdateEnv(%q) = %v, want GOPROXY=direct", ref, env)
@@ -63,8 +63,8 @@ func TestSelfUpdateUsesDirectProxyForMovingRefs(t *testing.T) {
 	}
 }
 
-func TestSelfUpdateKeepsProxyForLatestAndTags(t *testing.T) {
-	for _, ref := range []string{"latest", "v0.1.13"} {
+func TestSelfUpdateKeepsProxyForTags(t *testing.T) {
+	for _, ref := range []string{"v0.1.13"} {
 		if env := selfUpdateEnv(ref); len(env) != 0 {
 			t.Fatalf("selfUpdateEnv(%q) = %v, want empty", ref, env)
 		}

@@ -110,18 +110,19 @@ func selfUpdateCommand(ref, installDir string) ([]string, string, []string, erro
 }
 
 func selfUpdateEnv(ref string) []string {
-	if isMovingRef(ref) {
-		// The public Go proxy can cache branch queries such as @main long enough to
-		// make self-update appear stuck or even downgrade. Tags and @latest stay on
-		// the proxy path; moving refs go direct to GitHub.
+	if shouldUseDirectProxy(ref) {
+		// The public Go proxy can cache @latest and branch queries long enough to
+		// make self-update appear stuck or even downgrade. Explicit version tags are
+		// immutable and safe to keep on the normal proxy path; everything else goes
+		// direct to GitHub.
 		return []string{"GOPROXY=direct"}
 	}
 	return nil
 }
 
-func isMovingRef(ref string) bool {
+func shouldUseDirectProxy(ref string) bool {
 	ref = strings.TrimSpace(ref)
-	if ref == "" || ref == "latest" || strings.HasPrefix(ref, "v") {
+	if ref == "" || strings.HasPrefix(ref, "v") {
 		return false
 	}
 	return true
