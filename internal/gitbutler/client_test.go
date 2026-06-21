@@ -440,3 +440,32 @@ func TestParseCommandErrorForOldGitButlerCLI(t *testing.T) {
 		t.Fatalf("error should hide raw exit status: %v", err)
 	}
 }
+
+func TestRunJSONFallsBackToFormatJSON(t *testing.T) {
+	statusRaw, err := os.ReadFile("testdata/status.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{
+		outputs: map[string][]byte{
+			"status -j":            []byte("error: unexpected argument '-j' found"),
+			"status --format json": statusRaw,
+		},
+		errs: map[string]error{
+			"status -j": errors.New("exit status 2"),
+		},
+	}
+	client := NewClient(".", runner)
+
+	status, err := client.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.UnassignedChanges[0].CLIID != "ur" {
+		t.Fatalf("unexpected status: %#v", status.UnassignedChanges)
+	}
+	want := [][]string{{"status", "-j"}, {"status", "--format", "json"}}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+}
