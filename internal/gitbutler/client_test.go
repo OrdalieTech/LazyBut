@@ -429,3 +429,14 @@ func TestParseCommandErrorForMissingBut(t *testing.T) {
 		t.Fatalf("cli-not-found helper missed: %v", err)
 	}
 }
+
+func TestParseCommandErrorForOldGitButlerCLI(t *testing.T) {
+	raw := []byte("error: unexpected argument '-j' found\n\nUsage: but status [OPTIONS]")
+	err := parseCommandError(raw, errors.New("exit status 2"))
+	if err == nil || !strings.Contains(err.Error(), "GitButler CLI is too old for LazyBut") {
+		t.Fatalf("error = %v", err)
+	}
+	if strings.Contains(err.Error(), "exit status 2") {
+		t.Fatalf("error should hide raw exit status: %v", err)
+	}
+}

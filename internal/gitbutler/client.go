@@ -371,7 +371,16 @@ func parseCommandError(raw []byte, runErr error) error {
 	if text == "" {
 		return runErr
 	}
+	if isUnsupportedJSONFlagError(text) {
+		return fmt.Errorf("GitButler CLI is too old for LazyBut: %s. Update `but` with `curl -fsSL https://gitbutler.com/install.sh | sh`, or pass --but-bin to a newer GitButler CLI", firstNonEmptyLine(text))
+	}
 	return fmt.Errorf("%s: %s", runErr, text)
+}
+
+func isUnsupportedJSONFlagError(text string) bool {
+	lower := strings.ToLower(text)
+	return strings.Contains(lower, "unexpected argument '-j'") ||
+		strings.Contains(lower, "unexpected argument \"-j\"")
 }
 
 func parseGitChanges(raw []byte) []FileChange {

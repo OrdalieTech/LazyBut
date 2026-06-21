@@ -69,9 +69,9 @@ lazybut update -ref latest
 lazybut update -ref v0.1.8
 ```
 
-`lazybut update` installs `github.com/OrdalieTech/LazyBut/cmd/lazybut@main`
+`lazybut update` installs `github.com/OrdalieTech/LazyBut/cmd/lazybut@latest`
 into the directory that contains the current `lazybut` binary. It requires Go.
-Use `-ref latest` to follow the latest tagged module release instead.
+Use `-ref v0.1.8` to pin a specific tagged release.
 
 ## Run
 
