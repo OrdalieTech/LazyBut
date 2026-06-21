@@ -298,6 +298,10 @@ func (c *Client) Discard(ctx context.Context, target string) (*WorkspaceStatus, 
 
 func (c *Client) runJSON(ctx context.Context, out any, args ...string) error {
 	raw, err := c.runner().Run(ctx, c.Dir, args...)
+	if err != nil && needsFormatJSONFallback(raw, args) {
+		args = formatJSONArgs(args)
+		raw, err = c.runner().Run(ctx, c.Dir, args...)
+	}
 	if err != nil {
 		return parseCommandError(raw, err)
 	}
@@ -381,6 +385,27 @@ func isUnsupportedJSONFlagError(text string) bool {
 	lower := strings.ToLower(text)
 	return strings.Contains(lower, "unexpected argument '-j'") ||
 		strings.Contains(lower, "unexpected argument \"-j\"")
+}
+
+func needsFormatJSONFallback(raw []byte, args []string) bool {
+	for _, arg := range args {
+		if arg == "-j" {
+			return isUnsupportedJSONFlagError(string(raw))
+		}
+	}
+	return false
+}
+
+func formatJSONArgs(args []string) []string {
+	next := make([]string, 0, len(args)+1)
+	for _, arg := range args {
+		if arg == "-j" {
+			next = append(next, "--format", "json")
+			continue
+		}
+		next = append(next, arg)
+	}
+	return next
 }
 
 func parseGitChanges(raw []byte) []FileChange {
