@@ -14,6 +14,7 @@ import (
 )
 
 const modulePath = "github.com/OrdalieTech/LazyBut/cmd/lazybut"
+const defaultUpdateRef = "latest"
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "update" {
@@ -54,7 +55,7 @@ func main() {
 func runSelfUpdate(args []string) error {
 	flags := flag.NewFlagSet("update", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	ref := flags.String("ref", "main", "module ref to install, such as main, latest, or v0.1.8")
+	ref := flags.String("ref", defaultUpdateRef, "module ref to install, such as latest, main, or v0.1.8")
 	installDir := flags.String("install-dir", "", "directory to install lazybut into")
 	dryRun := flags.Bool("dry-run", false, "print the go install command without running it")
 	if err := flags.Parse(args); err != nil {

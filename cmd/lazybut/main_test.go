@@ -39,6 +39,12 @@ func TestSelfUpdateCommandUsesInstallDirAndRef(t *testing.T) {
 	}
 }
 
+func TestDefaultUpdateRefUsesLatestRelease(t *testing.T) {
+	if defaultUpdateRef != "latest" {
+		t.Fatalf("defaultUpdateRef = %q, want latest", defaultUpdateRef)
+	}
+}
+
 func TestSelfUpdateCommandRejectsEmptyRef(t *testing.T) {
 	if _, _, err := selfUpdateCommand(" ", "/tmp/bin"); err == nil {
 		t.Fatal("expected empty ref to fail")
