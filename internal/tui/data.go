@@ -1,6 +1,10 @@
 package tui
 
-import "github.com/OrdalieTech/LazyBut/internal/gitbutler"
+import (
+	"fmt"
+
+	"github.com/OrdalieTech/LazyBut/internal/gitbutler"
+)
 
 type laneKind int
 
@@ -80,13 +84,15 @@ func buildWorkspaceData(status *gitbutler.WorkspaceStatus, branches *gitbutler.B
 		return data
 	}
 
-	// Build a name → review URL map from branch list so we can attach the
-	// PR URL to each lane when the status only gives us the review ID.
+	// Build name → review maps from branch list so we can attach PR metadata
+	// when status only gives us part of the review data.
+	reviewIDs := map[string]string{}
 	reviewURLs := map[string]string{}
 	if branches != nil {
 		for _, stack := range branches.AppliedStacks {
 			for _, head := range stack.Heads {
 				for _, r := range head.Reviews {
+					reviewIDs[head.Name] = reviewIDString(r.Number)
 					reviewURLs[head.Name] = r.URL
 				}
 			}
@@ -135,6 +141,14 @@ func buildWorkspaceData(status *gitbutler.WorkspaceStatus, branches *gitbutler.B
 			}
 			if branch.ReviewID != nil {
 				ln.ReviewID = *branch.ReviewID
+			}
+			if branch.ReviewURL != nil {
+				ln.ReviewURL = *branch.ReviewURL
+			}
+			if ln.ReviewID == "" {
+				if id, ok := reviewIDs[branch.Name]; ok {
+					ln.ReviewID = id
+				}
 			}
 			if url, ok := reviewURLs[branch.Name]; ok {
 				ln.ReviewURL = url
@@ -303,6 +317,13 @@ func first(values []string) string {
 		return ""
 	}
 	return values[0]
+}
+
+func reviewIDString(number uint64) string {
+	if number == 0 {
+		return ""
+	}
+	return fmt.Sprint(number)
 }
 
 func derefString(p *string) string {

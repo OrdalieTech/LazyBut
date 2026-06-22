@@ -404,6 +404,67 @@ func TestLaneFooterShowsPullLoadingWithoutBehindArrow(t *testing.T) {
 	}
 }
 
+func TestKanbanColumnKeepsFooterWithMultilineCommitMessage(t *testing.T) {
+	status := loadFixtureStatus(t)
+	branch := &status.Stacks[0].Branches[0]
+	reviewID := "781"
+	branch.ReviewID = &reviewID
+	branch.BranchStatus = "nothingToPush"
+	branch.UpstreamCommits = nil
+	branch.Commits = []gitbutler.Commit{{
+		CLIID:     "c1",
+		CommitID:  "abcdef012345",
+		CreatedAt: "2026-06-21T16:32:32Z",
+		Message:   "subject\n\n" + strings.Repeat("body line\n", 20),
+	}}
+
+	model := newModel(gitbutler.NewClient(".", nil))
+	model.loading = false
+	model.data = buildWorkspaceData(status, nil)
+
+	column := model.renderKanbanColumn(model.data.Lanes[1], 1, 60, 14)
+	if !strings.Contains(column, "PR #781") {
+		t.Fatalf("footer PR should stay pinned below multiline commit message:\n%s", column)
+	}
+	if strings.Contains(column, "body line") {
+		t.Fatalf("commit body leaked into single-row kanban item:\n%s", column)
+	}
+}
+
+func TestCommitRowsNeverRenderPhysicalLineBreaks(t *testing.T) {
+	item := contentItem{
+		Kind:      contentCommit,
+		ID:        "abcdef012345",
+		Hash:      "abcdef0123456789",
+		Label:     "subject with\ttabs and a very very very very very long body\r\nsecond line should never render",
+		ReviewID:  "781",
+		ReviewURL: "https://github.com/OrdalieTech/Ordalie-back/pull/781",
+	}
+
+	for width := 12; width <= 80; width++ {
+		for _, tc := range []struct {
+			name     string
+			cursor   bool
+			selected bool
+		}{
+			{name: "normal"},
+			{name: "cursor", cursor: true},
+			{name: "selected", selected: true},
+		} {
+			row := renderItemRow(item, tc.selected, tc.cursor, true, width)
+			if strings.ContainsAny(row, "\r\n\t") {
+				t.Fatalf("%s row at width %d contains physical whitespace: %q", tc.name, width, row)
+			}
+			if got := lipgloss.Width(row); got > width {
+				t.Fatalf("%s row width = %d, want <= %d: %q", tc.name, got, width, row)
+			}
+			if strings.Contains(row, "second line") {
+				t.Fatalf("%s row rendered commit body at width %d: %q", tc.name, width, row)
+			}
+		}
+	}
+}
+
 func TestUpstreamConfirmMirrorsGitButlerDialogShape(t *testing.T) {
 	model := newModel(gitbutler.NewClient(".", nil))
 	model.data = buildWorkspaceData(loadFixtureStatus(t), loadFixtureBranches(t))

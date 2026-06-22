@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
+	"time"
 )
 
 type Runner interface {
@@ -36,9 +38,22 @@ func (r ExecRunner) Run(ctx context.Context, dir string, args ...string) ([]byte
 }
 
 type Client struct {
-	Dir    string
-	Runner Runner
+	Dir      string
+	Runner   Runner
+	GHRunner Runner
+
+	githubMu             sync.Mutex
+	githubPRs            map[string]Review
+	githubPRsExpiresAt   time.Time
+	githubPRErrorBackoff time.Time
 }
+
+const (
+	githubPRCacheTTL  = time.Minute
+	githubPRErrorTTL  = 2 * time.Minute
+	githubPRListLimit = "1000"
+	githubPRTimeout   = 2 * time.Second
+)
 
 func NewClient(dir string, runner Runner) *Client {
 	return &Client{Dir: dir, Runner: runner}
@@ -49,6 +64,7 @@ func (c *Client) Status(ctx context.Context) (*WorkspaceStatus, error) {
 	if err := c.runJSON(ctx, &status, "status", "-j"); err != nil {
 		return nil, err
 	}
+	c.enrichStatusWithGitHubPRs(ctx, &status)
 	return &status, nil
 }
 
@@ -83,7 +99,159 @@ func (c *Client) BranchList(ctx context.Context) (*BranchList, error) {
 	if err := c.runJSON(ctx, &branches, "branch", "list", "-j", "--all"); err != nil {
 		return nil, err
 	}
+	c.enrichBranchListWithGitHubPRs(ctx, &branches)
 	return &branches, nil
+}
+
+func (c *Client) enrichStatusWithGitHubPRs(ctx context.Context, status *WorkspaceStatus) {
+	if status == nil || !statusNeedsGitHubPRs(status) {
+		return
+	}
+	prs := c.githubPullRequests(ctx)
+	if len(prs) == 0 {
+		return
+	}
+	for stackIdx := range status.Stacks {
+		for branchIdx := range status.Stacks[stackIdx].Branches {
+			branch := &status.Stacks[stackIdx].Branches[branchIdx]
+			pr, ok := prs[branch.Name]
+			if !ok {
+				continue
+			}
+			if branch.ReviewID == nil || *branch.ReviewID == "" {
+				id := fmt.Sprint(pr.Number)
+				branch.ReviewID = &id
+			}
+			if branch.ReviewURL == nil || *branch.ReviewURL == "" {
+				url := pr.URL
+				branch.ReviewURL = &url
+			}
+		}
+	}
+}
+
+func statusNeedsGitHubPRs(status *WorkspaceStatus) bool {
+	for _, stack := range status.Stacks {
+		for _, branch := range stack.Branches {
+			if branch.Name == "" {
+				continue
+			}
+			if branch.ReviewID == nil || *branch.ReviewID == "" || branch.ReviewURL == nil || *branch.ReviewURL == "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (c *Client) enrichBranchListWithGitHubPRs(ctx context.Context, branches *BranchList) {
+	if branches == nil || !branchListNeedsGitHubPRs(branches) {
+		return
+	}
+	prs := c.githubPullRequests(ctx)
+	if len(prs) == 0 {
+		return
+	}
+	for stackIdx := range branches.AppliedStacks {
+		for headIdx := range branches.AppliedStacks[stackIdx].Heads {
+			head := &branches.AppliedStacks[stackIdx].Heads[headIdx]
+			if len(head.Reviews) > 0 {
+				continue
+			}
+			if pr, ok := prs[head.Name]; ok {
+				head.Reviews = []Review{pr}
+			}
+		}
+	}
+	for branchIdx := range branches.Branches {
+		branch := &branches.Branches[branchIdx]
+		if len(branch.Reviews) > 0 {
+			continue
+		}
+		if pr, ok := prs[branch.Name]; ok {
+			branch.Reviews = []Review{pr}
+		}
+	}
+}
+
+func branchListNeedsGitHubPRs(branches *BranchList) bool {
+	for _, stack := range branches.AppliedStacks {
+		for _, head := range stack.Heads {
+			if head.Name != "" && len(head.Reviews) == 0 {
+				return true
+			}
+		}
+	}
+	for _, branch := range branches.Branches {
+		if branch.Name != "" && len(branch.Reviews) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+type githubPullRequest struct {
+	Number      uint64 `json:"number"`
+	URL         string `json:"url"`
+	HeadRefName string `json:"headRefName"`
+}
+
+func (c *Client) githubPullRequests(ctx context.Context) map[string]Review {
+	if !c.shouldUseGitHubFallback() {
+		return nil
+	}
+
+	now := time.Now()
+	c.githubMu.Lock()
+	if now.Before(c.githubPRsExpiresAt) {
+		prs := cloneReviewMap(c.githubPRs)
+		c.githubMu.Unlock()
+		return prs
+	}
+	if now.Before(c.githubPRErrorBackoff) {
+		c.githubMu.Unlock()
+		return nil
+	}
+	c.githubMu.Unlock()
+
+	ghCtx, cancel := context.WithTimeout(ctx, githubPRTimeout)
+	defer cancel()
+	var raw []githubPullRequest
+	if err := c.runGHJSON(ghCtx, &raw, "pr", "list", "--state", "open", "--json", "number,url,headRefName", "--limit", githubPRListLimit); err != nil {
+		c.githubMu.Lock()
+		c.githubPRErrorBackoff = time.Now().Add(githubPRErrorTTL)
+		c.githubMu.Unlock()
+		return nil
+	}
+
+	prs := make(map[string]Review, len(raw))
+	for _, pr := range raw {
+		if pr.HeadRefName == "" || pr.Number == 0 || pr.URL == "" {
+			continue
+		}
+		if _, exists := prs[pr.HeadRefName]; exists {
+			continue
+		}
+		prs[pr.HeadRefName] = Review{Number: pr.Number, URL: pr.URL}
+	}
+
+	c.githubMu.Lock()
+	c.githubPRs = cloneReviewMap(prs)
+	c.githubPRsExpiresAt = time.Now().Add(githubPRCacheTTL)
+	c.githubPRErrorBackoff = time.Time{}
+	c.githubMu.Unlock()
+	return prs
+}
+
+func cloneReviewMap(in map[string]Review) map[string]Review {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]Review, len(in))
+	for name, review := range in {
+		out[name] = review
+	}
+	return out
 }
 
 func (c *Client) Setup(ctx context.Context, init bool) (*WorkspaceStatus, error) {
@@ -311,6 +479,17 @@ func (c *Client) runJSON(ctx context.Context, out any, args ...string) error {
 	return nil
 }
 
+func (c *Client) runGHJSON(ctx context.Context, out any, args ...string) error {
+	raw, err := c.ghRunner().Run(ctx, c.Dir, args...)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return fmt.Errorf("parse `gh %s`: %w", strings.Join(args, " "), err)
+	}
+	return nil
+}
+
 func (c *Client) runText(ctx context.Context, args ...string) (string, error) {
 	raw, err := c.runner().Run(ctx, c.Dir, args...)
 	if err != nil {
@@ -356,6 +535,25 @@ func (c *Client) runner() Runner {
 		return c.Runner
 	}
 	return ExecRunner{Bin: "but"}
+}
+
+func (c *Client) ghRunner() Runner {
+	if c.GHRunner != nil {
+		return c.GHRunner
+	}
+	return ExecRunner{Bin: "gh"}
+}
+
+func (c *Client) shouldUseGitHubFallback() bool {
+	if c.GHRunner != nil || c.Runner == nil {
+		return true
+	}
+	_, ok := c.Runner.(ExecRunner)
+	if ok {
+		return true
+	}
+	_, ok = c.Runner.(*ExecRunner)
+	return ok
 }
 
 func parseCommandError(raw []byte, runErr error) error {

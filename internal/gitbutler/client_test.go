@@ -41,6 +41,74 @@ func TestClientStatusUsesJSON(t *testing.T) {
 	}
 }
 
+func TestClientStatusEnrichesMissingGitHubPR(t *testing.T) {
+	statusRaw := []byte(`{
+		"unassignedChanges": [],
+		"stacks": [{
+			"cliId": "s1",
+			"assignedChanges": [],
+			"branches": [{
+				"cliId": "b1",
+				"name": "glose-os-poc",
+				"commits": [],
+				"upstreamCommits": [],
+				"branchStatus": "nothingToPush",
+				"reviewId": null,
+				"mergeStatus": "clean"
+			}]
+		}],
+		"mergeBase": {},
+		"upstreamState": {}
+	}`)
+	butRunner := &fakeRunner{outputs: map[string][]byte{"status -j": statusRaw}}
+	ghRunner := &fakeRunner{outputs: map[string][]byte{
+		"pr list --state open --json number,url,headRefName --limit 1000": []byte(`[{"number":781,"url":"https://github.com/OrdalieTech/Ordalie-back/pull/781","headRefName":"glose-os-poc"}]`),
+	}}
+	client := NewClient(".", butRunner)
+	client.GHRunner = ghRunner
+
+	status, err := client.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	branch := status.Stacks[0].Branches[0]
+	if branch.ReviewID == nil || *branch.ReviewID != "781" {
+		t.Fatalf("review id = %#v, want 781", branch.ReviewID)
+	}
+	if branch.ReviewURL == nil || *branch.ReviewURL != "https://github.com/OrdalieTech/Ordalie-back/pull/781" {
+		t.Fatalf("review url = %#v", branch.ReviewURL)
+	}
+
+	if _, err := client.Status(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(ghRunner.calls) != 1 {
+		t.Fatalf("gh calls = %#v, want cached single call", ghRunner.calls)
+	}
+}
+
+func TestClientBranchListEnrichesMissingGitHubPR(t *testing.T) {
+	branchRaw := []byte(`{
+		"appliedStacks": [{"id":"s1","heads":[{"name":"glose-os-poc","reviews":[]}]}],
+		"branches": []
+	}`)
+	butRunner := &fakeRunner{outputs: map[string][]byte{"branch list -j --all": branchRaw}}
+	ghRunner := &fakeRunner{outputs: map[string][]byte{
+		"pr list --state open --json number,url,headRefName --limit 1000": []byte(`[{"number":781,"url":"https://github.com/OrdalieTech/Ordalie-back/pull/781","headRefName":"glose-os-poc"}]`),
+	}}
+	client := NewClient(".", butRunner)
+	client.GHRunner = ghRunner
+
+	branches, err := client.BranchList(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviews := branches.AppliedStacks[0].Heads[0].Reviews
+	if len(reviews) != 1 || reviews[0].Number != 781 || reviews[0].URL == "" {
+		t.Fatalf("reviews = %#v", reviews)
+	}
+}
+
 func TestParseGitChanges(t *testing.T) {
 	raw := []byte(" M internal/tui/model.go\x00?? scratch.txt\x00R  new.go\x00old.go\x00UU conflicted.go\x00")
 	changes := parseGitChanges(raw)

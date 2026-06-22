@@ -52,6 +52,21 @@ func TestBuildWorkspaceData(t *testing.T) {
 	}
 }
 
+func TestBuildWorkspaceDataUsesBranchListReviewID(t *testing.T) {
+	status := loadFixtureStatus(t)
+	status.Stacks[0].Branches[0].ReviewID = nil
+	status.Stacks[0].Branches[0].ReviewURL = nil
+
+	data := buildWorkspaceData(status, loadFixtureBranches(t))
+	lane := data.Lanes[1]
+	if lane.ReviewID != "724" {
+		t.Fatalf("review id = %q, want 724", lane.ReviewID)
+	}
+	if lane.ReviewURL != "https://example.test/pull/724" {
+		t.Fatalf("review url = %q", lane.ReviewURL)
+	}
+}
+
 func TestBuildFastWorkspaceData(t *testing.T) {
 	data := buildFastWorkspaceData([]gitbutler.FileChange{{
 		CLIID:      "git:main.go",

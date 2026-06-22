@@ -34,6 +34,7 @@ type Branch struct {
 	UpstreamCommits []Commit   `json:"upstreamCommits"`
 	BranchStatus    StatusText `json:"branchStatus"`
 	ReviewID        *string    `json:"reviewId"`
+	ReviewURL       *string    `json:"reviewUrl"`
 	CI              *CI        `json:"ci"`
 	MergeStatus     StatusText `json:"mergeStatus"`
 }

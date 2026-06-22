@@ -629,14 +629,11 @@ func renderItemRow(item contentItem, isSelected, isCursor, focused bool, width i
 	if item.Conflicted {
 		glyph = glyphConflict
 	}
-	id := displayItemID(item)
+	id := sanitizeRowText(displayItemID(item))
 	if id == "" {
 		id = "-"
 	}
-	label := item.Label
-	if label == "" {
-		label = item.Detail
-	}
+	label := rowLabel(item.Label, item.Detail)
 	prSuffix := ""
 	if item.ReviewID != "" && item.Kind != contentChange {
 		prSuffix = " " + cleanReviewID(item.ReviewID)
@@ -675,6 +672,32 @@ func renderItemRow(item contentItem, isSelected, isCursor, focused bool, width i
 		out += " " + styleHotKey.Render(hyperlink(strings.TrimSpace(prSuffix), item.ReviewURL))
 	}
 	return fit(out, width)
+}
+
+func rowLabel(values ...string) string {
+	for _, value := range values {
+		for _, line := range strings.FieldsFunc(value, func(r rune) bool { return r == '\n' || r == '\r' }) {
+			line = sanitizeRowText(line)
+			if line != "" {
+				return line
+			}
+		}
+	}
+	return ""
+}
+
+func sanitizeRowText(value string) string {
+	value = strings.Map(func(r rune) rune {
+		switch r {
+		case '\n', '\r', '\t', '\v', '\f':
+			return ' '
+		}
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, value)
+	return strings.TrimSpace(value)
 }
 
 // compactPath fits a file path into width while always preserving the whole
