@@ -1901,8 +1901,8 @@ func (m Model) upstreamUpdateSummary() string {
 	branches, conflicts := m.upstreamBranchSummary()
 
 	lines := []string{}
-	if m.data.Status.UpstreamState.Behind > 0 {
-		lines = append(lines, fmt.Sprintf("Incoming target commits: %d", m.data.Status.UpstreamState.Behind))
+	if incoming := m.incomingChangeCount(); incoming > 0 {
+		lines = append(lines, fmt.Sprintf("Incoming target commits: %d", incoming))
 	} else {
 		lines = append(lines, "Incoming target commits: none detected")
 	}

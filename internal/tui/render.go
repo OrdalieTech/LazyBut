@@ -184,8 +184,8 @@ func (m Model) renderTop() string {
 	if m.data.Status != nil {
 		segs = append(segs, chip("stacks", fmt.Sprintf("%d", len(m.data.Status.Stacks))))
 		segs = append(segs, chip("zz", fmt.Sprintf("%d", len(m.data.Status.UnassignedChanges))))
-		if m.data.Status.UpstreamState.Behind > 0 {
-			segs = append(segs, styleWarn.Render(fmt.Sprintf("%s %d", glyphBehind, m.data.Status.UpstreamState.Behind)))
+		if incoming := m.incomingChangeCount(); incoming > 0 {
+			segs = append(segs, styleWarn.Render(fmt.Sprintf("%s %d", glyphBehind, incoming)))
 		}
 		if fetched := fetchedAgo(m.data.Status.UpstreamState.LastFetched); fetched != "" {
 			segs = append(segs, styleDim.Render(fetched))
@@ -2087,9 +2087,6 @@ func (m Model) incomingChangeCount() int {
 	if m.data.Status == nil {
 		return 0
 	}
-	if n := m.data.Status.UpstreamState.Behind; n > 0 {
-		return n
-	}
 	return len(m.data.Status.UpstreamState.UpstreamCommits)
 }
 
@@ -2097,12 +2094,12 @@ func (m Model) incomingCommit() gitbutler.Commit {
 	if m.data.Status == nil {
 		return gitbutler.Commit{}
 	}
+	if len(m.data.Status.UpstreamState.UpstreamCommits) > 0 {
+		return m.data.Status.UpstreamState.UpstreamCommits[0]
+	}
 	commit := m.data.Status.UpstreamState.LatestCommit
 	if commit.Message != "" || commit.CommitID != "" || commit.CLIID != "" {
 		return commit
-	}
-	if len(m.data.Status.UpstreamState.UpstreamCommits) > 0 {
-		return m.data.Status.UpstreamState.UpstreamCommits[0]
 	}
 	return gitbutler.Commit{}
 }

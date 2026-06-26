@@ -821,7 +821,13 @@ func TestPullSetsContextualLoadingState(t *testing.T) {
 
 func TestUpstreamUpdateSummaryAndConflictToast(t *testing.T) {
 	model := newModel(gitbutler.NewClient(".", nil))
-	model.data = buildWorkspaceData(loadFixtureStatus(t), loadFixtureBranches(t))
+	status := loadFixtureStatus(t)
+	status.UpstreamState.Behind = 12
+	status.UpstreamState.UpstreamCommits = []gitbutler.Commit{
+		{CommitID: "one", Message: "upstream one"},
+		{CommitID: "two", Message: "upstream two"},
+	}
+	model.data = buildWorkspaceData(status, loadFixtureBranches(t))
 
 	summary := model.upstreamUpdateSummary()
 	for _, want := range []string{
@@ -837,6 +843,22 @@ func TestUpstreamUpdateSummaryAndConflictToast(t *testing.T) {
 	text, kind := model.mutationToast("updated from upstream", model.data.Status)
 	if kind != toastError || !strings.Contains(text, "conflicts detected") {
 		t.Fatalf("toast = %q/%d", text, kind)
+	}
+}
+
+func TestIncomingCountIgnoresBehindWithoutCommitList(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	status := loadFixtureStatus(t)
+	status.UpstreamState.Behind = 12
+	status.UpstreamState.LatestCommit = status.MergeBase
+	status.UpstreamState.UpstreamCommits = nil
+	model.data = buildWorkspaceData(status, loadFixtureBranches(t))
+
+	if got := model.incomingChangeCount(); got != 0 {
+		t.Fatalf("incoming changes = %d, want 0", got)
+	}
+	if top := model.renderTop(); strings.Contains(top, glyphBehind+" 12") {
+		t.Fatalf("top bar should not show stale behind count: %q", top)
 	}
 }
 
