@@ -9,34 +9,134 @@
 <meta property="og:description" content="A terminal client for GitButler — LazyGit ergonomics for virtual branches.">
 <meta property="og:type" content="website">
 <style>
-  :root { color-scheme: dark; }
-  html, body { margin: 0; height: 100%; }
-  body {
-    background: #000; color: #fff;
-    font: 16px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    display: flex; flex-direction: column;
-    align-items: center; justify-content: center;
-    height: 100vh; overflow: hidden; text-align: center;
-    padding: 1.5rem; box-sizing: border-box;
+  :root{
+    --bg:#07090b; --panel:#0b0d10; --line:#1b212a; --dim:#6b7681;
+    --text:#cdd5dd; --accent:#5ccfe6; --blue:#6cb6ff; --green:#7ee787;
+    --amber:#e3b341; --red:#ff7b72; --purple:#d2a8ff; --white:#e6edf3;
   }
-  h1 { font-size: clamp(2.5rem, 12vw, 6rem); margin: 0 0 .5rem; letter-spacing: -.03em; }
-  p { color: #aaa; margin: .25rem 0; max-width: 34rem; }
-  a { color: #fff; }
-  code {
-    display: block; max-width: 90vw; margin: 1.75rem auto 0;
-    padding: .7rem 1rem; background: #0d0d0d; border: 1px solid #222;
-    border-radius: 8px; color: #fff; font-size: .9rem;
-    overflow-x: auto; white-space: nowrap;
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:
+      radial-gradient(120% 80% at 50% -10%, rgba(92,207,230,.08), transparent 60%),
+      var(--bg);
+    color:var(--text);
+    font:16px/1.6 ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Menlo,Consolas,monospace;
+    font-variant-emoji:text;
+    min-height:100vh; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:1.4rem;
+    padding:2rem 1.25rem; text-align:center;
   }
-  .links { margin-top: 1.5rem; }
-  .links a { color: #888; text-decoration: none; }
-  .links a:hover { color: #fff; }
+  .wrap{display:flex;flex-direction:column;align-items:center;gap:1.4rem;
+        width:100%;max-width:880px;animation:rise .8s cubic-bezier(.2,.7,.2,1) both}
+  h1{font-size:clamp(2.6rem,11vw,5.5rem);margin:0;letter-spacing:-.04em;color:var(--white);
+     text-shadow:0 0 28px rgba(92,207,230,.25)}
+  .tag{color:var(--dim);margin:0;max-width:34rem;line-height:1.5}
+  .tag a{color:var(--text);text-decoration:none;border-bottom:1px solid var(--line)}
+  .tag a:hover{color:var(--accent);border-color:var(--accent)}
+
+  .term{width:100%;background:var(--panel);border:1px solid var(--line);
+        border-radius:11px;overflow:hidden;
+        box-shadow:0 24px 70px rgba(0,0,0,.65), inset 0 1px 0 rgba(255,255,255,.03);
+        transition:box-shadow .4s ease, transform .4s ease}
+  .term:hover{box-shadow:0 24px 80px rgba(0,0,0,.7), 0 0 50px rgba(92,207,230,.12),
+              inset 0 1px 0 rgba(255,255,255,.05)}
+  .bar{display:flex;align-items:center;gap:.5rem;padding:.55rem .8rem;
+       background:#0e1116;border-bottom:1px solid var(--line)}
+  .dot{width:11px;height:11px;border-radius:50%;opacity:.85}
+  .dot.r{background:#ff5f56}.dot.y{background:#ffbd2e}.dot.g{background:#27c93f}
+  .bar .ttl{flex:1;text-align:center;color:var(--dim);font-size:.78rem;
+            margin-right:33px;letter-spacing:.02em}
+  .screen{margin:0;padding:14px 16px;text-align:left;overflow-x:auto;
+          white-space:pre;color:var(--text);
+          font-size:clamp(7.2px,1.55vw,12.5px);line-height:1.5}
+  .box{color:#2b333d}
+  .dim{color:var(--dim)} .sel{color:var(--accent)} .branch{color:var(--white)}
+  .id{color:#9aa6b2} .blue{color:var(--blue)} .green{color:var(--green)}
+  .amber{color:var(--amber)} .red{color:var(--red)} .pr{color:var(--purple)}
+  .cur{color:var(--accent);animation:blink 1.1s steps(1) infinite}
+
+  .cmd{display:flex;align-items:center;gap:.6rem;width:100%;
+       background:var(--panel);border:1px solid var(--line);border-radius:9px;
+       padding:.55rem .55rem .55rem .9rem}
+  .cmd code{flex:1;min-width:0;overflow-x:auto;white-space:nowrap;text-align:left;
+            color:var(--text);font-size:.82rem;padding-right:.4rem}
+  .cmd code::-webkit-scrollbar{height:0}
+  button#copy{flex:none;cursor:pointer;border:1px solid var(--line);
+              background:#10151b;color:var(--text);font:inherit;font-size:.8rem;
+              padding:.42rem .8rem;border-radius:7px;transition:all .18s ease}
+  button#copy:hover{border-color:var(--accent);color:var(--accent);
+                    background:rgba(92,207,230,.08)}
+  button#copy:active{transform:scale(.96)}
+  button#copy.ok{border-color:var(--green);color:var(--green);
+                 background:rgba(126,231,135,.1)}
+
+  .links{display:flex;gap:1.1rem}
+  .links a{color:var(--dim);text-decoration:none;font-size:.85rem;transition:color .2s}
+  .links a:hover{color:var(--white)}
+
+  @keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+  @keyframes blink{0%,49%{opacity:1}50%,100%{opacity:0}}
+  @media (prefers-reduced-motion:reduce){
+    *{animation:none!important;transition:none!important}
+    .cur{opacity:.7}
+  }
 </style>
 </head>
 <body>
-  <h1>LazyBut</h1>
-  <p>A terminal client for <a href="https://gitbutler.com">GitButler</a>.<br>LazyGit ergonomics for virtual branches.</p>
-  <code>curl -fsSL https://raw.githubusercontent.com/OrdalieTech/LazyBut/main/install.sh | bash</code>
-  <div class="links"><a href="https://github.com/OrdalieTech/LazyBut">github.com/OrdalieTech/LazyBut</a></div>
+  <main class="wrap">
+    <h1>LazyBut</h1>
+    <p class="tag">A terminal client for <a href="https://gitbutler.com">GitButler</a> —<br>LazyGit ergonomics for virtual branches.</p>
+
+    <div class="term">
+      <div class="bar">
+        <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+        <span class="ttl">lazybut · stardust</span>
+      </div>
+      <pre class="screen"><span class="sel">lazybut</span><span class="dim"> • </span>~/code/stardust<span class="dim"> • </span>stacks:4<span class="dim"> · </span>zz:11<span class="dim"> · </span><span class="amber">↓2</span><span class="dim"> · </span><span class="dim">fetched 12m ago</span> <span class="cur">█</span>                               
+<span class="box">╭────────────────────────────────╮╭───────────────────────────────╮╭───────────────────────────────╮</span>
+<span class="box">│</span><span class="sel">▸ zz unassigned changes</span>         <span class="box">││</span><span class="branch">feat/inline-editor</span>             <span class="box">││</span><span class="branch">fix/cache-eviction-race</span>        <span class="box">│</span>
+<span class="box">│</span><span class="dim">11f</span>                             <span class="box">││</span><span class="dim">2f · 2c</span>                        <span class="box">││</span><span class="dim">3c</span>                             <span class="box">│</span>
+<span class="box">│</span> <span class="blue">◆</span> <span class="id">ab</span> <span class="dim">…/components/Toolbar.tsx</span>  <span class="box">││</span> <span class="blue">◆</span> <span class="id">wx</span> <span class="dim">…/InlineEditor.tsx</span>       <span class="box">││</span> <span class="green">●</span> <span class="id">2a</span> fix: guard cache … <span class="pr">#138</span>  <span class="box">│</span>
+<span class="box">│</span> <span class="blue">◆</span> <span class="id">cd</span> <span class="dim">…/components/Toast.tsx</span>    <span class="box">││</span> <span class="blue">◆</span> <span class="id">yz</span> <span class="dim">…/InlineEditor.test.tsx</span>  <span class="box">││</span> <span class="amber">▲</span> <span class="id">2b</span> test: reproduce race…    <span class="box">│</span>
+<span class="box">│</span> <span class="blue">◆</span> <span class="id">ef</span> <span class="dim">…/legacy/oldHelper.ts</span>     <span class="box">││</span><span class="dim">────────── 2 commits ──────────</span><span class="box">││</span> <span class="green">●</span> <span class="id">2c</span> refactor: extract evict… <span class="box">│</span>
+<span class="box">│</span> <span class="blue">◆</span> <span class="id">gh</span> <span class="dim">…/cache/eviction.go</span>       <span class="box">││</span> <span class="green">●</span> <span class="id">1a</span> feat: enable inli… <span class="pr">#142</span>  <span class="box">││</span>                               <span class="box">│</span>
+<span class="box">│</span> <span class="blue">◆</span> <span class="id">ij</span> <span class="dim">…/ui/Button.svelte</span>        <span class="box">││</span> <span class="green">●</span> <span class="id">1b</span> feat: add empty-state ui <span class="box">││</span>                               <span class="box">│</span>
+<span class="box">│</span> <span class="blue">◆</span> <span class="id">kl</span> <span class="dim">…/ui/Tooltip.svelte</span>       <span class="box">││</span>                               <span class="box">││</span>                               <span class="box">│</span>
+<span class="box">│</span> <span class="blue">◆</span> <span class="id">mn</span> <span class="dim">…/docs/overview.md</span>        <span class="box">││</span>                               <span class="box">││</span>                               <span class="box">│</span>
+<span class="box">│</span>                                <span class="box">││</span><span class="dim">───────────────────────────────</span><span class="box">││</span><span class="dim">───────────────────────────────</span><span class="box">│</span>
+<span class="box">│</span>                                <span class="box">││</span>↑2<span class="dim"> · </span><span class="green">✓</span> CI 4<span class="dim"> · </span><span class="dim">PR </span><span class="pr">#142</span><span class="dim"> · </span><span class="dim">39d ago</span><span class="box">││</span><span class="red">✗</span> CI 1<span class="dim"> · </span><span class="amber">↑3!</span><span class="dim"> · </span><span class="pr">#138</span><span class="dim"> · </span><span class="dim">39d ago</span>  <span class="box">│</span>
+<span class="box">╰────────────────────────────────╯╰───────────────────────────────╯╰───────────────────────────────╯</span>
+<span class="box">╭──────────────────────────────────────────────────────────────────────────────────────────────────╮</span>
+<span class="box">│</span><span class="sel"> preview</span><span class="dim"> · </span>Toolbar.tsx   <span class="blue">◆</span> ab <span class="dim">modified</span>                                                            <span class="box">│</span>
+<span class="box">│</span><span class="dim">   43 43</span><span class="box">│</span><span class="dim"> import { trpc } from '@stardust/api-client'</span>                                             <span class="box">│</span>
+<span class="box">│</span><span class="dim">      45</span><span class="box">│</span><span class="green">+import { Toolbar } from './Toolbar'</span>                                                     <span class="box">│</span>
+<span class="box">│</span><span class="dim">   48   </span><span class="box">│</span><span class="red">-  onSave: (v: string) =&gt; void</span>                                                           <span class="box">│</span>
+<span class="box">│</span><span class="dim">      50</span><span class="box">│</span><span class="green">+  onSave: (v: string) =&gt; Promise&lt;void&gt;</span>                                                  <span class="box">│</span>
+<span class="box">╰──────────────────────────────────────────────────────────────────────────────────────────────────╯</span>
+<span class="sel">m</span><span class="dim"> assign</span><span class="dim"> · </span><span class="sel">d</span><span class="dim"> discard</span><span class="dim"> · </span><span class="sel">A</span><span class="dim"> amend</span><span class="dim"> · </span><span class="sel">r</span><span class="dim"> refresh</span><span class="dim"> · </span><span class="sel">+</span><span class="dim"> branch</span><span class="dim"> · </span><span class="sel">:</span><span class="dim"> actions</span><span class="dim"> · </span><span class="sel">/</span><span class="dim"> filter</span><span class="dim"> · </span><span class="sel">?</span><span class="dim"> help</span><span class="dim"> · </span><span class="sel">q</span><span class="dim"> quit</span>      </pre>
+    </div>
+
+    <div class="cmd">
+      <code id="cmd">curl -fsSL https://raw.githubusercontent.com/OrdalieTech/LazyBut/main/install.sh | bash</code>
+      <button id="copy" aria-label="Copy install command">Copy</button>
+    </div>
+
+    <div class="links">
+      <a href="https://github.com/OrdalieTech/LazyBut">github.com/OrdalieTech/LazyBut</a>
+    </div>
+  </main>
+
+  <script>
+    const btn=document.getElementById('copy');
+    btn.addEventListener('click',async()=>{
+      const text=document.getElementById('cmd').textContent.trim();
+      try{await navigator.clipboard.writeText(text);}
+      catch(e){const t=document.createElement('textarea');t.value=text;
+        document.body.appendChild(t);t.select();document.execCommand('copy');t.remove();}
+      const old=btn.textContent;btn.textContent='✓ Copied';btn.classList.add('ok');
+      setTimeout(()=>{btn.textContent=old;btn.classList.remove('ok');},1600);
+    });
+  </script>
 </body>
 </html>
