@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LazyBut</title>
+<meta name="description" content="A terminal client for GitButler — LazyGit ergonomics for virtual branches.">
+<meta property="og:title" content="LazyBut">
+<meta property="og:description" content="A terminal client for GitButler — LazyGit ergonomics for virtual branches.">
+<meta property="og:type" content="website">
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: #000; color: #fff;
+    font: 16px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    height: 100vh; overflow: hidden; text-align: center;
+    padding: 1.5rem; box-sizing: border-box;
+  }
+  h1 { font-size: clamp(2.5rem, 12vw, 6rem); margin: 0 0 .5rem; letter-spacing: -.03em; }
+  p { color: #aaa; margin: .25rem 0; max-width: 34rem; }
+  a { color: #fff; }
+  code {
+    display: block; max-width: 90vw; margin: 1.75rem auto 0;
+    padding: .7rem 1rem; background: #0d0d0d; border: 1px solid #222;
+    border-radius: 8px; color: #fff; font-size: .9rem;
+    overflow-x: auto; white-space: nowrap;
+  }
+  .links { margin-top: 1.5rem; }
+  .links a { color: #888; text-decoration: none; }
+  .links a:hover { color: #fff; }
+</style>
+</head>
+<body>
+  <h1>LazyBut</h1>
+  <p>A terminal client for <a href="https://gitbutler.com">GitButler</a>.<br>LazyGit ergonomics for virtual branches.</p>
+  <code>curl -fsSL https://raw.githubusercontent.com/OrdalieTech/LazyBut/main/install.sh | bash</code>
+  <div class="links"><a href="https://github.com/OrdalieTech/LazyBut">github.com/OrdalieTech/LazyBut</a></div>
+</body>
+</html>
