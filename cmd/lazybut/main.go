@@ -1,21 +1,31 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/OrdalieTech/LazyBut/internal/gitbutler"
 	"github.com/OrdalieTech/LazyBut/internal/tui"
 )
 
 const modulePath = "github.com/OrdalieTech/LazyBut/cmd/lazybut"
+const repoSlug = "OrdalieTech/LazyBut"
 const defaultUpdateRef = "latest"
+
+// version is stamped by the release workflow via -ldflags "-X main.version=vX.Y.Z".
+// Empty for source builds, which fall back to module/VCS build info.
+var version string
 
 func main() {
 	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "--version") {
@@ -57,78 +67,142 @@ func main() {
 	}
 }
 
+// runSelfUpdate downloads the release binary for this platform — the same
+// assets install.sh uses — and swaps it in place. No Go toolchain needed,
+// so binaries installed via install.sh can update themselves.
 func runSelfUpdate(args []string) error {
 	flags := flag.NewFlagSet("update", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	ref := flags.String("ref", defaultUpdateRef, "module ref to install, such as latest, main, or v0.1.8")
-	installDir := flags.String("install-dir", "", "directory to install lazybut into")
-	dryRun := flags.Bool("dry-run", false, "print the go install command without running it")
+	ref := flags.String("ref", defaultUpdateRef, "release tag to install, such as latest or v0.1.21")
+	installDir := flags.String("install-dir", "", "directory to install lazybut into (default: alongside the current binary)")
+	dryRun := flags.Bool("dry-run", false, "print what would be downloaded without installing")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected update argument %q", flags.Arg(0))
 	}
-	cmd, targetDir, env, err := selfUpdateCommand(*ref, *installDir)
+	tag, err := resolveUpdateTag(strings.TrimSpace(*ref))
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Updating lazybut from %s...\n", modulePath+"@"+*ref)
-	fmt.Printf("Installing to %s\n", targetDir)
-	if *dryRun {
-		fmt.Println(strings.Join(append(append([]string{"GOBIN=" + targetDir}, env...), cmd...), " "))
+	targetDir := *installDir
+	if targetDir == "" {
+		if targetDir, err = currentInstallDir(); err != nil {
+			return err
+		}
+	}
+	target := filepath.Join(targetDir, "lazybut")
+	if tag == versionString() {
+		fmt.Printf("lazybut %s is already the newest release\n", tag)
 		return nil
 	}
-	command := exec.Command(cmd[0], cmd[1:]...)
-	command.Env = append(os.Environ(), append([]string{"GOBIN=" + targetDir}, env...)...)
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
-	if err := command.Run(); err != nil {
-		return fmt.Errorf("update failed: %w", err)
+	assetURL := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", repoSlug, tag, releaseAsset())
+	fmt.Printf("Updating lazybut %s -> %s\n", versionString(), tag)
+	if *dryRun {
+		fmt.Printf("Would download %s\nWould install to %s\n", assetURL, target)
+		return nil
 	}
-	fmt.Println("lazybut updated")
+	if err := downloadAndInstall(assetURL, target); err != nil {
+		return err
+	}
+	fmt.Printf("lazybut %s installed to %s\n", tag, target)
 	return nil
 }
 
-func selfUpdateCommand(ref, installDir string) ([]string, string, []string, error) {
-	ref = strings.TrimSpace(ref)
+func releaseAsset() string {
+	return fmt.Sprintf("lazybut_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+}
+
+// resolveUpdateTag turns "latest" into the concrete release tag by following
+// GitHub's releases/latest redirect; explicit tags pass through unchanged.
+func resolveUpdateTag(ref string) (string, error) {
 	if ref == "" {
-		return nil, "", nil, fmt.Errorf("update ref cannot be empty")
+		return "", fmt.Errorf("update ref cannot be empty")
 	}
-	if installDir == "" {
-		executable, err := os.Executable()
+	if ref != defaultUpdateRef {
+		return ref, nil
+	}
+	resp, err := httpClient().Get("https://github.com/" + repoSlug + "/releases/latest")
+	if err != nil {
+		return "", fmt.Errorf("resolve latest release: %w", err)
+	}
+	defer resp.Body.Close()
+	final := resp.Request.URL.Path
+	idx := strings.LastIndex(final, "/tag/")
+	if resp.StatusCode != http.StatusOK || idx < 0 {
+		return "", fmt.Errorf("resolve latest release: unexpected response %s (%s)", resp.Status, final)
+	}
+	return final[idx+len("/tag/"):], nil
+}
+
+func currentInstallDir() (string, error) {
+	executable, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("locate current executable: %w", err)
+	}
+	if resolved, err := filepath.EvalSymlinks(executable); err == nil {
+		executable = resolved
+	}
+	return filepath.Dir(executable), nil
+}
+
+// downloadAndInstall streams the release tar.gz, extracts the lazybut binary
+// into a temp file beside target, and renames it into place — atomic on the
+// same filesystem, and replacing a running binary is fine on unix.
+func downloadAndInstall(url, target string) error {
+	resp, err := httpClient().Get(url)
+	if err != nil {
+		return fmt.Errorf("download %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download %s: %s — no release asset for this platform? try `go install %s@latest`", url, resp.Status, modulePath)
+	}
+	gz, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read release archive: %w", err)
+	}
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return fmt.Errorf("release archive has no lazybut binary")
+		}
 		if err != nil {
-			return nil, "", nil, fmt.Errorf("locate current executable: %w", err)
+			return fmt.Errorf("read release archive: %w", err)
 		}
-		resolved, err := filepath.EvalSymlinks(executable)
-		if err == nil {
-			executable = resolved
+		if hdr.Typeflag != tar.TypeReg || filepath.Base(hdr.Name) != "lazybut" {
+			continue
 		}
-		installDir = filepath.Dir(executable)
+		tmp, err := os.CreateTemp(filepath.Dir(target), ".lazybut-update-*")
+		if err != nil {
+			return err
+		}
+		defer os.Remove(tmp.Name())
+		if _, err := io.Copy(tmp, tr); err != nil {
+			tmp.Close()
+			return fmt.Errorf("write update: %w", err)
+		}
+		if err := tmp.Chmod(0o755); err != nil {
+			tmp.Close()
+			return err
+		}
+		if err := tmp.Close(); err != nil {
+			return err
+		}
+		return os.Rename(tmp.Name(), target)
 	}
-	return []string{"go", "install", modulePath + "@" + ref}, installDir, selfUpdateEnv(ref), nil
 }
 
-func selfUpdateEnv(ref string) []string {
-	if shouldUseDirectProxy(ref) {
-		// The public Go proxy can cache @latest and branch queries long enough to
-		// make self-update appear stuck or even downgrade. Explicit version tags are
-		// immutable and safe to keep on the normal proxy path; everything else goes
-		// direct to GitHub.
-		return []string{"GOPROXY=direct"}
-	}
-	return nil
-}
-
-func shouldUseDirectProxy(ref string) bool {
-	ref = strings.TrimSpace(ref)
-	if ref == "" || strings.HasPrefix(ref, "v") {
-		return false
-	}
-	return true
+func httpClient() *http.Client {
+	return &http.Client{Timeout: 3 * time.Minute}
 }
 
 func versionString() string {
+	if version != "" {
+		return version
+	}
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return "unknown"

@@ -1,6 +1,15 @@
 package main
 
-import "testing"
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestParseSize(t *testing.T) {
 	width, height, err := parseSize("120x40")
@@ -20,53 +29,77 @@ func TestParseSizeRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-func TestSelfUpdateCommandUsesInstallDirAndRef(t *testing.T) {
-	cmd, installDir, env, err := selfUpdateCommand("v0.1.8", "/tmp/bin")
+func TestResolveUpdateTagPassesThroughExplicitTags(t *testing.T) {
+	tag, err := resolveUpdateTag("v0.1.21")
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantCmd := []string{"go", "install", "github.com/OrdalieTech/LazyBut/cmd/lazybut@v0.1.8"}
-	if len(cmd) != len(wantCmd) {
-		t.Fatalf("cmd length = %d, want %d", len(cmd), len(wantCmd))
+	if tag != "v0.1.21" {
+		t.Fatalf("tag = %q", tag)
 	}
-	for i := range cmd {
-		if cmd[i] != wantCmd[i] {
-			t.Fatalf("cmd[%d] = %q, want %q", i, cmd[i], wantCmd[i])
-		}
-	}
-	if installDir != "/tmp/bin" {
-		t.Fatalf("installDir = %q", installDir)
-	}
-	if len(env) != 0 {
-		t.Fatalf("env = %v, want empty", env)
-	}
-}
-
-func TestDefaultUpdateRefUsesLatestRelease(t *testing.T) {
-	if defaultUpdateRef != "latest" {
-		t.Fatalf("defaultUpdateRef = %q, want latest", defaultUpdateRef)
-	}
-}
-
-func TestSelfUpdateCommandRejectsEmptyRef(t *testing.T) {
-	if _, _, _, err := selfUpdateCommand(" ", "/tmp/bin"); err == nil {
+	if _, err := resolveUpdateTag(""); err == nil {
 		t.Fatal("expected empty ref to fail")
 	}
 }
 
-func TestSelfUpdateUsesDirectProxyForLatestAndMovingRefs(t *testing.T) {
-	for _, ref := range []string{"latest", "main", "feature/test"} {
-		env := selfUpdateEnv(ref)
-		if len(env) != 1 || env[0] != "GOPROXY=direct" {
-			t.Fatalf("selfUpdateEnv(%q) = %v, want GOPROXY=direct", ref, env)
-		}
+// End-to-end check of the update mechanics: serve a release tarball from a
+// local server, install it over an existing binary, verify content and mode.
+func TestDownloadAndInstallReplacesBinary(t *testing.T) {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	payload := []byte("#!/bin/sh\necho new-lazybut\n")
+	if err := tw.WriteHeader(&tar.Header{Name: "lazybut", Mode: 0o755, Size: int64(len(payload)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(buf.Bytes())
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "lazybut")
+	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := downloadAndInstall(server.URL, target); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("installed binary content = %q", got)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("installed binary mode = %v, want 0755", info.Mode().Perm())
 	}
 }
 
-func TestSelfUpdateKeepsProxyForTags(t *testing.T) {
-	for _, ref := range []string{"v0.1.13"} {
-		if env := selfUpdateEnv(ref); len(env) != 0 {
-			t.Fatalf("selfUpdateEnv(%q) = %v, want empty", ref, env)
-		}
+func TestDownloadAndInstallRejectsMissingAsset(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+	target := filepath.Join(t.TempDir(), "lazybut")
+	if err := downloadAndInstall(server.URL, target); err == nil {
+		t.Fatal("expected 404 download to fail")
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatal("failed update must not leave a binary behind")
 	}
 }

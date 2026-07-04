@@ -36,7 +36,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           mkdir -p dist
-          go build -trimpath -ldflags="-s -w" -o "dist/lazybut" ./cmd/lazybut
+          go build -trimpath -ldflags="-s -w -X main.version=${GITHUB_REF_NAME}" -o "dist/lazybut" ./cmd/lazybut
           tar -C dist -czf "lazybut_${GOOS}_${GOARCH}.tar.gz" lazybut
       - uses: actions/upload-artifact@v4
         with:
