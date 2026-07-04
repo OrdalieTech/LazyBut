@@ -97,6 +97,13 @@ func runSelfUpdate(args []string) error {
 		fmt.Printf("lazybut %s is already the newest release\n", tag)
 		return nil
 	}
+	// GitHub's releases/latest pointer can lag for a few minutes after a new
+	// release publishes; never let "latest" silently downgrade. An explicit
+	// --ref still installs any version on purpose.
+	if *ref == defaultUpdateRef && isOlderRelease(tag, versionString()) {
+		fmt.Printf("latest release %s is older than current %s — a newer release may still be propagating; try again in a minute\n", tag, versionString())
+		return nil
+	}
 	assetURL := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", repoSlug, tag, releaseAsset())
 	fmt.Printf("Updating lazybut %s -> %s\n", versionString(), tag)
 	if *dryRun {
@@ -134,6 +141,29 @@ func resolveUpdateTag(ref string) (string, error) {
 		return "", fmt.Errorf("resolve latest release: unexpected response %s (%s)", resp.Status, final)
 	}
 	return final[idx+len("/tag/"):], nil
+}
+
+// isOlderRelease reports whether a is a strictly older vX.Y.Z release than b.
+// False when either side doesn't parse (dev builds, commit hashes), so the
+// guard never blocks updates from non-release builds.
+func isOlderRelease(a, b string) bool {
+	va, aok := parseReleaseTag(a)
+	vb, bok := parseReleaseTag(b)
+	if !aok || !bok {
+		return false
+	}
+	for i := range va {
+		if va[i] != vb[i] {
+			return va[i] < vb[i]
+		}
+	}
+	return false
+}
+
+func parseReleaseTag(tag string) ([3]int, bool) {
+	var v [3]int
+	n, err := fmt.Sscanf(tag, "v%d.%d.%d", &v[0], &v[1], &v[2])
+	return v, err == nil && n == 3
 }
 
 func currentInstallDir() (string, error) {

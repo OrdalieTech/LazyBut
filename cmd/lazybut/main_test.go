@@ -42,6 +42,26 @@ func TestResolveUpdateTagPassesThroughExplicitTags(t *testing.T) {
 	}
 }
 
+func TestIsOlderRelease(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{"v0.1.21", "v0.1.22", true},
+		{"v0.1.22", "v0.1.21", false},
+		{"v0.1.22", "v0.1.22", false},
+		{"v0.1.9", "v0.1.10", true}, // numeric, not lexicographic
+		{"v0.1.21", "v0.1.21+dirty", false},
+		{"v0.1.21", "dev", false},
+		{"dev", "v0.1.21", false},
+	}
+	for _, c := range cases {
+		if got := isOlderRelease(c.a, c.b); got != c.want {
+			t.Fatalf("isOlderRelease(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}
+
 // End-to-end check of the update mechanics: serve a release tarball from a
 // local server, install it over an existing binary, verify content and mode.
 func TestDownloadAndInstallReplacesBinary(t *testing.T) {
