@@ -579,11 +579,17 @@ func TestPreviewZoneDetection(t *testing.T) {
 }
 
 func TestSmallHeightHidesPreview(t *testing.T) {
-	if got := previewStripHeight(10); got != 0 {
+	if got := previewStripHeight(10, false); got != 0 {
 		t.Fatalf("body height 10 should hide preview, got %d", got)
 	}
-	if got := previewStripHeight(14); got == 0 {
+	if got := previewStripHeight(14, false); got == 0 {
 		t.Fatalf("body height 14 should still expose preview")
+	}
+	if normal, expanded := previewStripHeight(40, false), previewStripHeight(40, true); expanded <= normal {
+		t.Fatalf("expanded preview (%d) should be taller than normal (%d)", expanded, normal)
+	}
+	if got := previewStripHeight(40, true); 40-got < 8 {
+		t.Fatalf("expanded preview must leave >=8 rows for the main area, left %d", 40-got)
 	}
 }
 
@@ -636,7 +642,7 @@ func TestHotbarKeepsMetaKeysAtNarrowWidth(t *testing.T) {
 
 	view := model.View()
 	// ANSI escape codes sit between key and label, so check each label alone.
-	for _, want := range []string{"quit", "help", "actions", "filter"} {
+	for _, want := range []string{"quit", "help", "actions", "preview", "inspect"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("hotbar should always keep meta label %q at narrow width\n%s", want, view)
 		}

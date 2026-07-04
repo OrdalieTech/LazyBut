@@ -862,6 +862,21 @@ func TestIncomingCountIgnoresBehindWithoutCommitList(t *testing.T) {
 	}
 }
 
+// Older `but` CLIs never emit upstreamCommits: behind + an unmerged upstream
+// tip is the only signal that remote changes exist, and it must count.
+func TestIncomingCountFallsBackToBehindWhenTipUnmerged(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	status := loadFixtureStatus(t)
+	status.UpstreamState.Behind = 1
+	status.UpstreamState.LatestCommit = gitbutler.Commit{CommitID: "remote-tip", Message: "Merge pull request #808"}
+	status.UpstreamState.UpstreamCommits = nil
+	model.data = buildWorkspaceData(status, loadFixtureBranches(t))
+
+	if got := model.incomingChangeCount(); got != 1 {
+		t.Fatalf("incoming changes = %d, want 1", got)
+	}
+}
+
 func TestUpdateFromUpstreamRefreshesBeforeSayingNoUpdate(t *testing.T) {
 	model := newModel(gitbutler.NewClient(".", nil))
 	status := loadFixtureStatus(t)
@@ -1025,8 +1040,15 @@ func TestAutoRefreshStatusOnly(t *testing.T) {
 		t.Fatalf("calls = %#v", runner.calls)
 	}
 
+	// includeBranches=true must also reload the branch list — it carries PR
+	// reviews and ahead/behind state that otherwise go permanently stale.
+	branchesRaw, err := os.ReadFile("../gitbutler/testdata/branch_list.json")
+	if err != nil {
+		t.Fatal(err)
+	}
 	runner = &actionRunner{outputs: map[string][]byte{
-		"status -j": statusRaw,
+		"status -j":            statusRaw,
+		"branch list -j --all": branchesRaw,
 	}}
 	model = newModel(gitbutler.NewClient(".", runner))
 	model.loading = false
@@ -1035,10 +1057,14 @@ func TestAutoRefreshStatusOnly(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected coalesced auto-refresh command")
 	}
-	if _, ok := cmd().(autoRefreshMsg); !ok {
+	msg, ok := cmd().(autoRefreshMsg)
+	if !ok {
 		t.Fatalf("unexpected message from auto refresh")
 	}
-	if !reflect.DeepEqual(runner.calls, [][]string{{"status", "-j"}}) {
+	if msg.branches == nil {
+		t.Fatal("branch-including refresh should return a branch list")
+	}
+	if !reflect.DeepEqual(runner.calls, [][]string{{"status", "-j"}, {"branch", "list", "-j", "--all"}}) {
 		t.Fatalf("calls = %#v", runner.calls)
 	}
 }

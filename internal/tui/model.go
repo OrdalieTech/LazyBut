@@ -41,6 +41,10 @@ const (
 	statusRefreshTimeout      = 90 * time.Second
 	branchListTimeout         = 2 * time.Minute
 	autoRefreshTimeout        = 45 * time.Second
+	// branchRefreshEvery is how many 3s status cycles pass between branch-list
+	// reloads (~30s). The branch list carries PR reviews, ahead counts, and
+	// merge-clean flags — without periodic reloads those go permanently stale.
+	branchRefreshEvery = 10
 )
 
 type actionID string
@@ -113,33 +117,35 @@ type Model struct {
 	width  int
 	height int
 
-	data          workspaceData
-	loading       bool
-	loadingLabel  string // e.g. "pushing", "pulling", shown in the activity indicator
-	loadingAction actionID
-	loadingBranch string
-	err           error
-	toast         string
-	toastKind     toastKind
-	toastExpires  time.Time
-	focus         panel
-	mode          mode
-	laneCursor    int
-	contentCursor int
-	previewScroll int
-	filter        string
-	previewTarget string
-	preview       string
-	previewErr    error
-	selected      map[string]bool
-	rangeAnchor   int
-	spinnerFrame  int
-	ticking       bool
+	data            workspaceData
+	loading         bool
+	loadingLabel    string // e.g. "pushing", "pulling", shown in the activity indicator
+	loadingAction   actionID
+	loadingBranch   string
+	err             error
+	toast           string
+	toastKind       toastKind
+	toastExpires    time.Time
+	focus           panel
+	mode            mode
+	laneCursor      int
+	contentCursor   int
+	previewScroll   int
+	filter          string
+	previewTarget   string
+	preview         string
+	previewErr      error
+	previewExpanded bool // = toggles: preview takes ~60% of the body instead of a strip
+	selected        map[string]bool
+	rangeAnchor     int
+	spinnerFrame    int
+	ticking         bool
 
 	autoRefreshInFlight        bool
 	autoRefreshPending         bool
 	autoRefreshPendingBranches bool
 	autoRefreshEnabled         bool
+	autoRefreshCycle           int // counts 3s ticks; every branchRefreshEvery-th also reloads the branch list
 	// spinnerFrame at which the current background sync began, so the activity
 	// indicator can stay hidden for quick refreshes (which complete in well
 	// under syncIndicatorDelay) and only surface for genuinely slow ones.
@@ -217,9 +223,7 @@ type oplogLoadedMsg struct {
 	err     error
 }
 
-type autoRefreshTickMsg struct {
-	branches bool
-}
+type autoRefreshTickMsg struct{}
 
 type loadedMsg struct {
 	status   *gitbutler.WorkspaceStatus
@@ -283,6 +287,7 @@ func newModel(client *gitbutler.Client) Model {
 		selected:           map[string]bool{},
 		rangeAnchor:        -1,
 		autoRefreshEnabled: true,
+		ticking:            true, // Init starts the tick loop
 	}
 }
 
@@ -349,7 +354,7 @@ func setupGitButlerConfirmText(err error) string {
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{startupRefreshCmd(), tickCmd()}
 	if m.autoRefreshEnabled {
-		cmds = append(cmds, autoRefreshTickCmd(false))
+		cmds = append(cmds, autoRefreshTickCmd())
 	}
 	return tea.Batch(cmds...)
 }
@@ -366,14 +371,44 @@ func tickCmd() tea.Cmd {
 	})
 }
 
-func autoRefreshTickCmd(branches bool) tea.Cmd {
-	interval := autoStatusRefreshInterval
-	return tea.Tick(interval, func(t time.Time) tea.Msg {
-		return autoRefreshTickMsg{branches: branches}
+func autoRefreshTickCmd() tea.Cmd {
+	return tea.Tick(autoStatusRefreshInterval, func(t time.Time) tea.Msg {
+		return autoRefreshTickMsg{}
 	})
 }
 
+// Update wraps update to manage the 90ms UI tick: the loop stops itself when
+// nothing animates (see the tickMsg case) and is restarted here whenever a
+// message leaves the model needing animation again — so an idle lazybut does
+// zero re-renders instead of ~11 per second.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	model, cmd := m.update(msg)
+	if next, ok := model.(Model); ok && !next.ticking && next.needsTick() {
+		next.ticking = true
+		return next, tea.Batch(cmd, tickCmd())
+	}
+	return model, cmd
+}
+
+// needsTick reports whether anything on screen depends on the spinner frame or
+// timed expiry: loading spinners, background sync, toast fade, the input caret,
+// the preview "loading diff…" spinner, or a pending-CI footer chip.
+func (m Model) needsTick() bool {
+	if m.loading || m.autoRefreshInFlight || m.toast != "" || m.mode == modeInput {
+		return true
+	}
+	if m.previewTarget != "" && m.preview == "" && m.previewErr == nil {
+		return true
+	}
+	for _, lane := range m.data.Lanes {
+		if lane.CIPresent && lane.CIConclusion == "pending" {
+			return true
+		}
+	}
+	return false
+}
+
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -456,10 +491,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.toast != "" && !m.toastExpires.IsZero() && time.Now().After(m.toastExpires) {
 			m.toast = ""
 		}
+		if !m.needsTick() {
+			m.ticking = false
+			return m, nil
+		}
 		return m, tickCmd()
 	case autoRefreshTickMsg:
-		m, refreshCmd := m.requestAutoRefresh(msg.branches)
-		return m, tea.Batch(autoRefreshTickCmd(msg.branches), refreshCmd)
+		m.autoRefreshCycle++
+		// Reload the branch list on the first cycle after startup (it is never
+		// loaded eagerly) and every ~30s after, so PR metadata and remote
+		// ahead/behind state stay in sync without user action.
+		branches := m.data.Branches == nil || m.autoRefreshCycle%branchRefreshEvery == 0
+		m, refreshCmd := m.requestAutoRefresh(branches)
+		return m, tea.Batch(autoRefreshTickCmd(), refreshCmd)
 	case autoRefreshMsg:
 		m.autoRefreshInFlight = false
 		if m.loading {
@@ -592,13 +636,13 @@ func (m Model) handleMouse(mouse tea.MouseMsg) (tea.Model, tea.Cmd) {
 // main rendered box height.
 func (m Model) mainAreaHeight() int {
 	bodyH := max(1, m.height-2) // minus top bar + hotbar
-	previewH := previewStripHeight(bodyH)
+	previewH := previewStripHeight(bodyH, m.previewExpanded)
 	mainH := max(4, bodyH-previewH)
 	return 1 + mainH // top bar + main box
 }
 
 func (m Model) hasPreviewStrip() bool {
-	return previewStripHeight(max(1, m.height-2)) > 0
+	return previewStripHeight(max(1, m.height-2), m.previewExpanded) > 0
 }
 
 func (m Model) inPreviewZone(y int) bool {
@@ -618,8 +662,8 @@ func (m Model) scrollPreview(delta int) Model {
 	}
 	// Clamp so the scroll can't run past the end of the preview content.
 	if m.hasPreviewStrip() {
-		totalRows := len(m.previewRawRows(contentWidth(m.width)))
-		visibleRows := contentHeight(previewStripHeight(max(1, m.height-2)))
+		totalRows := m.previewRowCount(contentWidth(m.width))
+		visibleRows := contentHeight(previewStripHeight(max(1, m.height-2), m.previewExpanded))
 		maxScroll := max(0, totalRows-visibleRows)
 		if m.previewScroll > maxScroll {
 			m.previewScroll = maxScroll
@@ -754,15 +798,22 @@ func (m Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.scrollPreview(-3), nil
 	case "ctrl+d":
 		return m.scrollPreview(3), nil
+	case "=":
+		m.previewExpanded = !m.previewExpanded
+		if m.previewExpanded {
+			m.focus = panelPreview
+		}
+		return m, nil
 	}
 
 	// Whenever there are lanes, h/l move between branches and j/k move within the
 	// active branch — identical in the wide kanban and the narrow tabbed view, so
 	// the navigation muscle memory carries across terminal sizes.
 	if len(m.filteredLanes()) > 0 {
-		// enter on a file change opens the full-screen diff view.
+		// enter inspects whatever is under the cursor — file diff or commit —
+		// in the full-screen view. Lane switching stays on tab/h/l.
 		if key.String() == "enter" {
-			if item, ok := m.selectedContent(); ok && item.Kind == contentChange && item.ID != "" {
+			if item, ok := m.selectedContent(); ok && item.ID != "" {
 				return m.enterDiffMode()
 			}
 		}
@@ -1758,6 +1809,11 @@ func (m Model) refreshCmd() tea.Cmd {
 }
 
 func (m Model) statusLoadCmd() tea.Cmd {
+	// The fast `git status` fallback only matters before the first GitButler
+	// status lands (fastStatusMsg is discarded afterwards) — skip the subprocess.
+	if m.data.Status != nil {
+		return m.refreshCmd()
+	}
 	return tea.Batch(m.fastStatusCmd(), m.refreshCmd())
 }
 
@@ -1814,12 +1870,25 @@ func (m Model) autoRefreshCmd(includeBranches bool) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), autoRefreshTimeout)
 		defer cancel()
 
+		if includeBranches {
+			// Fetch remote refs on the slow cycle so behind/upstream state in
+			// `but status` reflects the actual remote — older `but` CLIs never
+			// fetch outside `but pull`. Best-effort: offline is fine.
+			_ = client.GitFetch(ctx)
+		}
+
 		status, err := client.Status(ctx)
 		if err != nil {
 			return autoRefreshMsg{err: err}
 		}
 
-		return autoRefreshMsg{status: status, err: err}
+		var branches *gitbutler.BranchList
+		if includeBranches {
+			// Best-effort: a failed branch-list reload keeps the previous data
+			// rather than surfacing an error for a background sync.
+			branches, _ = client.BranchList(ctx)
+		}
+		return autoRefreshMsg{status: status, branches: branches}
 	}
 }
 
@@ -2149,10 +2218,11 @@ func (m Model) enterDiffMode() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// diffBodyLines returns the raw diff body lines (without the header or box
-// decoration) that the diff view renders and navigates.
+// diffBodyLines returns the raw (unstyled) diff body lines that the diff view
+// renders and navigates; renderDiffView styles only the visible window.
 func (m Model) diffBodyLines() []string {
-	return m.previewBodyRows(contentWidth(m.width))
+	rows, _ := m.previewBodyRawRows()
+	return rows
 }
 
 // handleDiffKey handles keyboard input in the full-screen diff view.
@@ -2182,19 +2252,19 @@ func (m Model) handleDiffKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.diffCursor = max(0, m.diffCursor-5)
 	case "ctrl+d":
 		m.diffCursor = min(len(lines)-1, m.diffCursor+5)
-	case "m", "a":
+	case "m", "a", "enter":
 		// Stage the file to a branch — same as the normal-mode assign action.
-		m.mode = modeNormal
-		return m.startAction(m.actionByID(actionStage))
+		// Only meaningful for file changes; commits are view-only here.
+		if item, ok := m.selectedContent(); ok && item.Kind == contentChange {
+			m.mode = modeNormal
+			return m.startAction(m.actionByID(actionStage))
+		}
 	case "d":
 		// Discard the file change.
-		m.mode = modeNormal
-		return m.startAction(m.actionByID(actionDiscard))
-	case "enter":
-		// On a +/- line, stage the file (file-level staging until hunk-level
-		// support is verified).
-		m.mode = modeNormal
-		return m.startAction(m.actionByID(actionStage))
+		if item, ok := m.selectedContent(); ok && item.Kind == contentChange {
+			m.mode = modeNormal
+			return m.startAction(m.actionByID(actionDiscard))
+		}
 	}
 	return m, nil
 }

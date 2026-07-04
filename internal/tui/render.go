@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 	"github.com/muesli/ansi"
 
 	"github.com/OrdalieTech/LazyBut/internal/gitbutler"
@@ -367,7 +368,7 @@ func chip(label, value string) string {
 }
 
 func (m Model) renderBody(width, height int) string {
-	previewH := previewStripHeight(height)
+	previewH := previewStripHeight(height, m.previewExpanded)
 	mainH := max(4, height-previewH)
 	main := m.renderMain(width, mainH)
 	if previewH == 0 {
@@ -377,17 +378,20 @@ func (m Model) renderBody(width, height int) string {
 	return lipgloss.JoinVertical(lipgloss.Left, main, preview)
 }
 
-func previewStripHeight(bodyHeight int) int {
+func previewStripHeight(bodyHeight int, expanded bool) int {
 	if bodyHeight < 14 {
 		return 0
 	}
-	// Keep the preview strip compact so the preview panel sits close to the
-	// main workspace, similar to how kanban columns sit side-by-side.
+	// Compact strip by default so the preview sits close to the workspace;
+	// expanded (=) flips the ratio so the preview becomes the reading surface.
 	want := bodyHeight * 22 / 100
+	if expanded {
+		want = bodyHeight * 3 / 5
+	}
 	if want < 5 {
 		want = 5
 	}
-	if want > 10 {
+	if !expanded && want > 10 {
 		want = 10
 	}
 	// Never starve the columns: keep at least 8 rows for the main area.
@@ -957,8 +961,23 @@ func (m Model) laneTabStrip(width int) string {
 }
 
 func (m Model) renderPreview(width, height int) string {
-	rows := m.previewLines(contentWidth(width), contentHeight(height))
-	return box(m.previewTitle(m.focus == panelPreview), strings.Join(rows, "\n"), width, height, m.focus == panelPreview)
+	focused := m.focus == panelPreview
+	innerW := contentWidth(width)
+	visible := contentHeight(height)
+	rows := m.previewLines(innerW, visible)
+	title := m.previewTitle(focused)
+	// Quiet right-side affordances: scroll position when there's more content,
+	// and the expand/shrink key so the feature is discoverable without help.
+	if total := m.previewRowCount(innerW); total > visible {
+		pct := min(100, m.previewScroll*100/max(1, total-visible))
+		title += styleDim.Render(fmt.Sprintf(" %s %d%%", sepDot, pct))
+	}
+	hint := "expand"
+	if m.previewExpanded {
+		hint = "shrink"
+	}
+	title += styleFaint.Render(" "+sepDot+" ") + styleHotKey.Render("=") + styleHotLabel.Render(" "+hint)
+	return box(title, strings.Join(rows, "\n"), width, height, focused)
 }
 
 func (m Model) previewTitle(focused bool) string {
@@ -1472,25 +1491,45 @@ func (m Model) formatContentLine(item contentItem, idx, width int) string {
 	return renderItemRow(item, m.selected[item.ID], isCursor, m.focus == panelContents, width)
 }
 
-// previewRawRows returns the full list of preview rows (header + blank +
-// body) without windowing, so callers can compute total height for clamping
-// and scroll indicators.
-func (m Model) previewRawRows(width int) []string {
+// previewRowCount returns the total preview row count (header + blank + body)
+// so scroll clamping can work without styling anything.
+func (m Model) previewRowCount(width int) int {
 	header := m.previewHeaderRows(width)
-	body := m.previewBodyRows(width)
-	rows := append([]string{}, header...)
+	body, _ := m.previewBodyRawRows()
+	n := len(header) + len(body)
 	if len(header) > 0 && len(body) > 0 {
+		n++
+	}
+	return max(1, n)
+}
+
+// previewLines windows the preview rows FIRST and only then styles + fits the
+// visible diff lines — so a multi-thousand-line diff costs O(visible) per
+// frame instead of O(total).
+func (m Model) previewLines(width, height int) []string {
+	header := m.previewHeaderRows(width)
+	body, isDiff := m.previewBodyRawRows()
+	rows := append([]string{}, header...)
+	bodyStart := len(rows)
+	if len(rows) > 0 && len(body) > 0 {
 		rows = append(rows, "")
+		bodyStart++
 	}
 	rows = append(rows, body...)
 	if len(rows) == 0 {
 		return []string{styleDim.Render("select an item to preview")}
 	}
-	return rows
-}
-
-func (m Model) previewLines(width, height int) []string {
-	return windowRows(m.previewRawRows(width), m.previewScroll, height)
+	start := windowStart(len(rows), m.previewScroll, height)
+	end := min(len(rows), start+max(1, height))
+	out := make([]string, 0, end-start)
+	for i := start; i < end; i++ {
+		if isDiff && i >= bodyStart {
+			out = append(out, styleDiffLine(fit(rows[i], width)))
+		} else {
+			out = append(out, rows[i])
+		}
+	}
+	return out
 }
 
 // previewHeaderRows builds the always-visible identity card for the focused
@@ -1509,17 +1548,19 @@ func (m Model) previewHeaderRows(width int) []string {
 	return nil
 }
 
-// previewBodyRows renders the async-loaded body (diff or commit summary). It
-// strips `but diff`'s own decorative file-header so the path isn't shown twice.
-func (m Model) previewBodyRows(width int) []string {
+// previewBodyRawRows returns the preview body rows and whether they are raw
+// diff content (true — caller styles/fits only the visible window) or a small
+// pre-styled placeholder (false). It strips `but diff`'s own decorative
+// file-header so the path isn't shown twice.
+func (m Model) previewBodyRawRows() ([]string, bool) {
 	if m.previewErr != nil {
-		return splitLines(styleErr.Render(m.previewErr.Error()))
+		return splitLines(styleErr.Render(m.previewErr.Error())), false
 	}
 	if m.preview == "" {
 		if m.previewSelectionTarget() != "" {
-			return []string{styleLoad.Render(spinnerFrame(m.spinnerFrame) + " loading diff…")}
+			return []string{styleLoad.Render(spinnerFrame(m.spinnerFrame) + " loading diff…")}, false
 		}
-		return nil
+		return nil, false
 	}
 	rows := splitLines(m.preview)
 	out := make([]string, 0, len(rows))
@@ -1527,12 +1568,12 @@ func (m Model) previewBodyRows(width int) []string {
 		if isBoxDecoration(row) || isPreviewDuplicateFileHeader(row) {
 			continue
 		}
-		out = append(out, styleDiffLine(fit(row, width)))
+		out = append(out, row)
 	}
 	if len(out) == 0 {
-		return []string{styleDim.Render("(empty)")}
+		return []string{styleDim.Render("(empty)")}, false
 	}
-	return out
+	return out, true
 }
 
 // isPreviewDuplicateFileHeader matches `but diff`'s `<id> <path>│` line so we
@@ -1687,8 +1728,9 @@ func (m Model) renderHotbar() string {
 		actions = append(actions, hint{a.Key, actionShortLabel(a)})
 	}
 	meta := []hint{
+		{"enter", "inspect"},
+		{"=", "preview"},
 		{":", "actions"},
-		{"/", "filter"},
 		{"?", "help"},
 		{"q", "quit"},
 	}
@@ -2087,7 +2129,19 @@ func (m Model) incomingChangeCount() int {
 	if m.data.Status == nil {
 		return 0
 	}
-	return len(m.data.Status.UpstreamState.UpstreamCommits)
+	upstream := m.data.Status.UpstreamState
+	if n := len(upstream.UpstreamCommits); n > 0 {
+		return n
+	}
+	// Older `but` CLIs never emit upstreamCommits; fall back to the behind
+	// count — but only when the fetched upstream tip is a commit we haven't
+	// merged yet, so a stale behind number alone can't trigger the pull
+	// prompt (the "ignore stale upstream counts" guard).
+	if upstream.Behind > 0 && upstream.LatestCommit.CommitID != "" &&
+		upstream.LatestCommit.CommitID != m.data.Status.MergeBase.CommitID {
+		return upstream.Behind
+	}
+	return 0
 }
 
 func (m Model) incomingCommit() gitbutler.Commit {
@@ -2172,12 +2226,12 @@ func (m Model) renderDiffView() string {
 
 	bodyLines := make([]string, 0, bodyH)
 	for i := scroll; i < len(lines) && len(bodyLines) < bodyH; i++ {
-		line := lines[i]
+		line := fit(lines[i], innerW)
 		if i == m.diffCursor {
 			padded := padRight(stripAnsi(line), innerW)
 			bodyLines = append(bodyLines, styleSelectedRow.Render(padded))
 		} else {
-			bodyLines = append(bodyLines, fit(line, innerW))
+			bodyLines = append(bodyLines, styleDiffLine(line))
 		}
 	}
 	for len(bodyLines) < bodyH {
@@ -2190,12 +2244,15 @@ func (m Model) renderDiffView() string {
 		pct := scroll * 100 / max(1, maxScroll)
 		pos = styleDim.Render(fmt.Sprintf(" %d%%", pct))
 	}
-	footer := strings.Join([]string{
-		styleHotKey.Render("j/k") + " " + styleHotLabel.Render("navigate"),
-		styleHotKey.Render("m") + " " + styleHotLabel.Render("assign"),
-		styleHotKey.Render("d") + " " + styleHotLabel.Render("discard"),
-		styleHotKey.Render("esc") + " " + styleHotLabel.Render("back"),
-	}, styleDim.Render(" · ")) + pos
+	hints := []string{styleHotKey.Render("j/k") + " " + styleHotLabel.Render("navigate")}
+	if item.Kind == contentChange {
+		hints = append(hints,
+			styleHotKey.Render("m")+" "+styleHotLabel.Render("assign"),
+			styleHotKey.Render("d")+" "+styleHotLabel.Render("discard"),
+		)
+	}
+	hints = append(hints, styleHotKey.Render("esc")+" "+styleHotLabel.Render("back"))
+	footer := strings.Join(hints, styleDim.Render(" · ")) + pos
 
 	allLines := append([]string{fit(header, innerW)}, bodyLines...)
 	allLines = append(allLines, fit(footer, innerW))
@@ -2396,6 +2453,7 @@ func (m Model) renderHelp() string {
 	body := strings.Join([]string{
 		styleDim.Render("Navigation"),
 		"  " + styleHotKey.Render("h/l") + " " + styleHotLabel.Render("branches") + "   " + styleHotKey.Render("j/k") + " " + styleHotLabel.Render("items") + "   " + styleHotKey.Render("space/v") + " " + styleHotLabel.Render("select") + "   " + styleHotKey.Render("/") + " " + styleHotLabel.Render("filter"),
+		"  " + styleHotKey.Render("enter") + " " + styleHotLabel.Render("inspect file/commit full-screen") + "   " + styleHotKey.Render("=") + " " + styleHotLabel.Render("expand/shrink preview"),
 		"  " + styleHotKey.Render("ctrl+u/d") + " " + styleHotLabel.Render("scroll preview") + "   " + styleHotLabel.Render("(mouse wheel works on every panel)"),
 		"",
 		styleDim.Render("Workspace"),
@@ -2614,7 +2672,7 @@ func ansiSplit(s string, cols int) (left, right string) {
 			}
 			continue
 		}
-		w := lipgloss.Width(string(r))
+		w := runewidth.RuneWidth(r)
 		if width+w > cols {
 			cut = true
 			rightBuf.WriteRune(r)
@@ -2686,7 +2744,7 @@ func fit(value string, width int) string {
 			}
 			continue
 		}
-		w := lipgloss.Width(string(r))
+		w := runewidth.RuneWidth(r)
 		if acc+w > limit {
 			break
 		}

@@ -76,6 +76,14 @@ func (c *Client) GitChanges(ctx context.Context) ([]FileChange, error) {
 	return parseGitChanges(raw), nil
 }
 
+// GitFetch updates remote-tracking refs directly via git. Older `but` CLIs
+// have no fetch command and only fetch during `but pull`, so without this
+// the behind/upstream state reported by `but status` goes stale indefinitely.
+func (c *Client) GitFetch(ctx context.Context) error {
+	_, err := c.runGit(ctx, "fetch", "--quiet")
+	return err
+}
+
 func (c *Client) GitDiff(ctx context.Context, path string) (string, error) {
 	raw, err := c.runGit(ctx, "diff", "--no-ext-diff", "--", path)
 	if err != nil {
