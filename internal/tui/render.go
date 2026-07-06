@@ -2476,7 +2476,7 @@ func (m Model) renderHelp() string {
 		styleDim.Render("Workspace"),
 		"  " + styleHotLabel.Render("kanban shows zz + active branches; ") + styleHotKey.Render("+") + " " + styleHotLabel.Render("or") + " " + styleHotKey.Render("B") + " " + styleHotLabel.Render("opens inactive branches"),
 		"  " + styleHotKey.Render("u") + " " + styleHotLabel.Render("checks upstream update; ") + styleHotKey.Render("p") + " " + styleHotLabel.Render("updates/rebases all applied branches"),
-		"  " + styleHotKey.Render("o") + " " + styleHotLabel.Render("create PR; ") + styleHotKey.Render("O") + " " + styleHotLabel.Render("create draft PR; ") + styleHotKey.Render("U") + " " + styleHotLabel.Render("uncommit; ") + styleHotKey.Render("ctrl+o") + " " + styleHotLabel.Render("copy PR URL"),
+		"  " + styleHotKey.Render("o") + " " + styleHotLabel.Render("create PR; ") + styleHotKey.Render("O") + " " + styleHotLabel.Render("draft PR; ") + styleHotKey.Render("ctrl+o") + " " + styleHotLabel.Render("copy PR URL; ") + styleHotKey.Render("ctrl+g") + " " + styleHotLabel.Render("GitHub sign-in"),
 		"",
 		styleDim.Render("Actions"),
 		"  " + styleHotKey.Render(":") + " " + styleHotLabel.Render("action palette") + "   " + styleHotKey.Render("space/v") + " " + styleHotLabel.Render("select"),

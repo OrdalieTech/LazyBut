@@ -21,6 +21,24 @@ func (r *fakeRunner) Run(_ context.Context, _ string, args ...string) ([]byte, e
 	return r.outputs[key], r.errs[key]
 }
 
+func TestClientBinAndForgeAuthCommand(t *testing.T) {
+	// Default and custom binary names both resolve correctly.
+	if got := NewClient(".", &fakeRunner{}).Bin(); got != "but" {
+		t.Fatalf("default bin = %q, want but", got)
+	}
+	c := NewClient("/repo", ExecRunner{Bin: "but-nightly"})
+	if got := c.Bin(); got != "but-nightly" {
+		t.Fatalf("custom bin = %q", got)
+	}
+	cmd := c.ForgeAuthCommand(context.Background())
+	if cmd.Dir != "/repo" {
+		t.Fatalf("auth cmd dir = %q", cmd.Dir)
+	}
+	if want := []string{"but-nightly", "config", "forge", "auth"}; !reflect.DeepEqual(cmd.Args, want) {
+		t.Fatalf("auth cmd args = %v, want %v", cmd.Args, want)
+	}
+}
+
 func TestClientStatusUsesJSON(t *testing.T) {
 	statusRaw, err := os.ReadFile("testdata/status.json")
 	if err != nil {

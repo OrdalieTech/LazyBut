@@ -88,6 +88,7 @@ const (
 	actionRestore          actionID = "restore"
 	actionCleanDryRun      actionID = "clean_dry_run"
 	actionClean            actionID = "clean"
+	actionForgeAuth        actionID = "forge_auth"
 )
 
 type action struct {
@@ -269,6 +270,10 @@ type textMsg struct {
 type installGitButlerMsg struct {
 	body string
 	err  error
+}
+
+type forgeAuthDoneMsg struct {
+	err error
 }
 
 func Run(client *gitbutler.Client, autoRefresh bool) error {
@@ -461,7 +466,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, previewCmd
 		}
 		if msg.err != nil {
-			m.setToast(humanizeCLIError(msg.err), toastError)
+			m = m.reportActionError(msg.err)
 		}
 		return m, nil
 	case branchListMsg:
@@ -484,6 +489,13 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.err = nil
 		m.setToast("GitButler CLI installed; refreshing", toastSuccess)
+		return m.startLoading("loading status"), m.statusLoadCmd()
+	case forgeAuthDoneMsg:
+		if msg.err != nil {
+			m.setToast("forge auth failed: "+humanizeCLIError(msg.err), toastError)
+			return m, nil
+		}
+		m.setToast("GitHub authenticated — retry your PR action", toastSuccess)
 		return m.startLoading("loading status"), m.statusLoadCmd()
 	case tickMsg:
 		m.spinnerFrame++
@@ -547,7 +559,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			loadingAction := m.loadingAction
 			m = m.stopLoading()
 			if msg.err != nil {
-				m.setToast(humanizeCLIError(msg.err), toastError)
+				m = m.reportActionError(msg.err)
 				return m, nil
 			}
 			m.previewErr = nil
@@ -1696,6 +1708,8 @@ func (m Model) execute(action action, input string) (tea.Model, tea.Cmd) {
 		return m.startLoading("cleaning"), m.mutationCmd("cleaned", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Clean(ctx)
 		})
+	case actionForgeAuth:
+		return m, m.forgeAuthCmd()
 	default:
 		m.toast = fmt.Sprintf("unknown action: %s", action.ID)
 		return m, nil
@@ -2049,7 +2063,7 @@ func humanizeCLIError(err error) string {
 	msg := strings.TrimSpace(err.Error())
 	low := strings.ToLower(msg)
 	if strings.Contains(low, "forge auth") || strings.Contains(low, "authenticated forge") {
-		return "GitHub auth needed — run `but config forge auth` in a terminal, then retry"
+		return "GitHub auth needed — press ctrl+g to sign in, then retry"
 	}
 	// Otherwise collapse to the first meaningful line, dropping the generic
 	// "Error:"/"Caused by:" scaffolding `but` prints.
@@ -2062,6 +2076,50 @@ func humanizeCLIError(err error) string {
 		return line
 	}
 	return msg
+}
+
+// isForgeAuthError reports whether a `but` error is the "no authenticated
+// forge users" failure that blocks every PR action.
+func isForgeAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	low := strings.ToLower(err.Error())
+	return strings.Contains(low, "forge auth") || strings.Contains(low, "authenticated forge")
+}
+
+func forgeAuthConfirmAction() action {
+	return action{
+		ID:    actionForgeAuth,
+		Label: "authenticate GitHub",
+		ConfirmText: "GitButler must authenticate with GitHub before it can manage PRs " +
+			"(this is separate from `gh`).\n\nConfirm to open the interactive login " +
+			"(`but config forge auth`) — device code or token — right here, then retry your PR.",
+	}
+}
+
+// reportActionError turns a failed action into the right UI: forge-auth
+// failures open a guided confirm that can launch the login flow in place;
+// everything else is a concise toast.
+func (m Model) reportActionError(err error) Model {
+	if isForgeAuthError(err) && m.mode == modeNormal {
+		m.confirm = confirmState{Action: forgeAuthConfirmAction()}
+		m.mode = modeConfirm
+		return m
+	}
+	m.setToast(humanizeCLIError(err), toastError)
+	return m
+}
+
+// forgeAuthCmd suspends the TUI and runs `but config forge auth` attached to
+// the terminal so the user can complete GitHub's interactive device/token
+// login, then resumes and reports the outcome.
+func (m Model) forgeAuthCmd() tea.Cmd {
+	client := m.client
+	cmd := client.ForgeAuthCommand(context.Background())
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return forgeAuthDoneMsg{err: err}
+	})
 }
 
 func workspaceHasConflicts(status *gitbutler.WorkspaceStatus) bool {

@@ -894,7 +894,7 @@ func TestAsyncActionStartsLoadingImmediately(t *testing.T) {
 
 func TestHumanizeCLIError(t *testing.T) {
 	forge := errors.New("Failed to create forge review for branch.\n\nCaused by:\n    No authenticated forge users found.\n    Run 'but config forge auth' to authenticate with GitHub.")
-	if got := humanizeCLIError(forge); !strings.Contains(got, "but config forge auth") || strings.Contains(got, "\n") {
+	if got := humanizeCLIError(forge); !strings.Contains(got, "ctrl+g") || strings.Contains(got, "\n") {
 		t.Fatalf("forge-auth error not humanized: %q", got)
 	}
 	generic := errors.New("Error: something broke\nCaused by:\n    deeper detail")
@@ -906,24 +906,48 @@ func TestHumanizeCLIError(t *testing.T) {
 	}
 }
 
-// Pressing O (create draft PR) routes CLI errors to a toast, never the raw
-// multi-line blob into the preview zone.
-func TestPRErrorGoesToToastNotPreview(t *testing.T) {
+// A generic PR/action error goes to a toast, never as a raw multi-line blob in
+// the preview zone.
+func TestGenericActionErrorGoesToToastNotPreview(t *testing.T) {
 	model := newModel(gitbutler.NewClient(".", nil))
 	model.data = buildWorkspaceData(loadFixtureStatus(t), loadFixtureBranches(t))
+	model.mode = modeNormal
 	model.preview = "existing diff"
 
-	authErr := errors.New("Caused by:\n    No authenticated forge users found.")
+	next, _ := model.Update(textMsg{target: "message", err: errors.New("Error: something broke\nCaused by:\n    detail")})
+	m := next.(Model)
+	if m.previewErr != nil || m.preview != "existing diff" {
+		t.Fatalf("preview clobbered: err=%v body=%q", m.previewErr, m.preview)
+	}
+	if m.mode != modeNormal {
+		t.Fatalf("generic error should not open a modal, mode=%d", m.mode)
+	}
+	if m.toastKind != toastError || !strings.Contains(m.toast, "something broke") {
+		t.Fatalf("toast = %q/%d", m.toast, m.toastKind)
+	}
+}
+
+// A forge-auth failure opens the guided confirm that can launch the in-app
+// login flow — not a fading toast the user might miss.
+func TestForgeAuthErrorOpensGuidedConfirm(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	model.data = buildWorkspaceData(loadFixtureStatus(t), loadFixtureBranches(t))
+	model.mode = modeNormal
+
+	authErr := errors.New("Failed to create forge review.\n\nCaused by:\n    No authenticated forge users found.")
 	next, _ := model.Update(textMsg{target: "message", err: authErr})
 	m := next.(Model)
-	if m.previewErr != nil {
-		t.Fatalf("preview should not carry the error, got %v", m.previewErr)
+	if m.mode != modeConfirm || m.confirm.Action.ID != actionForgeAuth {
+		t.Fatalf("forge-auth error should open the auth confirm, got mode=%d action=%q", m.mode, m.confirm.Action.ID)
 	}
-	if m.preview != "existing diff" {
-		t.Fatalf("preview clobbered: %q", m.preview)
+
+	// Accepting it must launch a command (the interactive login), not no-op.
+	accepted, cmd := m.acceptConfirm()
+	if cmd == nil {
+		t.Fatal("accepting forge-auth confirm should return a command")
 	}
-	if m.toastKind != toastError || !strings.Contains(m.toast, "forge auth") {
-		t.Fatalf("toast = %q/%d", m.toast, m.toastKind)
+	if accepted.(Model).mode != modeNormal {
+		t.Fatalf("confirm should close on accept, mode=%d", accepted.(Model).mode)
 	}
 }
 

@@ -59,6 +59,31 @@ func NewClient(dir string, runner Runner) *Client {
 	return &Client{Dir: dir, Runner: runner}
 }
 
+// Bin returns the configured `but` binary name (default "but"), so callers can
+// run it interactively outside the Runner abstraction (e.g. forge auth).
+func (c *Client) Bin() string {
+	switch r := c.Runner.(type) {
+	case ExecRunner:
+		if r.Bin != "" {
+			return r.Bin
+		}
+	case *ExecRunner:
+		if r != nil && r.Bin != "" {
+			return r.Bin
+		}
+	}
+	return "but"
+}
+
+// ForgeAuthCommand builds the interactive `but config forge auth` command. It
+// prompts for a device-login or token, so it must run attached to the terminal
+// (via tea.Exec), not through the Runner.
+func (c *Client) ForgeAuthCommand(ctx context.Context) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, c.Bin(), "config", "forge", "auth")
+	cmd.Dir = c.Dir
+	return cmd
+}
+
 func (c *Client) Status(ctx context.Context) (*WorkspaceStatus, error) {
 	var status WorkspaceStatus
 	if err := c.runJSON(ctx, &status, "status", "-j"); err != nil {

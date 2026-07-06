@@ -46,6 +46,7 @@ func (m Model) availableActions() []action {
 		action{ID: actionCleanDryRun, Key: "C", Label: "clean dry-run"},
 		action{ID: actionClean, Key: "K", Label: "clean empty branches", Dangerous: true, ConfirmText: "Remove empty branches from the workspace?"},
 		action{ID: actionResolveStatus, Key: "R", Label: "resolve status"},
+		action{ID: actionForgeAuth, Key: "ctrl+g", Label: "authenticate GitHub (forge)", ConfirmText: forgeAuthConfirmAction().ConfirmText},
 	)
 
 	if isBranch {
