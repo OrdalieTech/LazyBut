@@ -846,6 +846,41 @@ func TestUpstreamUpdateSummaryAndConflictToast(t *testing.T) {
 	}
 }
 
+func TestHumanizeCLIError(t *testing.T) {
+	forge := errors.New("Failed to create forge review for branch.\n\nCaused by:\n    No authenticated forge users found.\n    Run 'but config forge auth' to authenticate with GitHub.")
+	if got := humanizeCLIError(forge); !strings.Contains(got, "but config forge auth") || strings.Contains(got, "\n") {
+		t.Fatalf("forge-auth error not humanized: %q", got)
+	}
+	generic := errors.New("Error: something broke\nCaused by:\n    deeper detail")
+	if got := humanizeCLIError(generic); got != "something broke" {
+		t.Fatalf("generic error = %q, want %q", got, "something broke")
+	}
+	if got := humanizeCLIError(nil); got != "" {
+		t.Fatalf("nil error = %q, want empty", got)
+	}
+}
+
+// Pressing O (create draft PR) routes CLI errors to a toast, never the raw
+// multi-line blob into the preview zone.
+func TestPRErrorGoesToToastNotPreview(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	model.data = buildWorkspaceData(loadFixtureStatus(t), loadFixtureBranches(t))
+	model.preview = "existing diff"
+
+	authErr := errors.New("Caused by:\n    No authenticated forge users found.")
+	next, _ := model.Update(textMsg{target: "message", err: authErr})
+	m := next.(Model)
+	if m.previewErr != nil {
+		t.Fatalf("preview should not carry the error, got %v", m.previewErr)
+	}
+	if m.preview != "existing diff" {
+		t.Fatalf("preview clobbered: %q", m.preview)
+	}
+	if m.toastKind != toastError || !strings.Contains(m.toast, "forge auth") {
+		t.Fatalf("toast = %q/%d", m.toast, m.toastKind)
+	}
+}
+
 func TestIncomingCountIgnoresBehindWithoutCommitList(t *testing.T) {
 	model := newModel(gitbutler.NewClient(".", nil))
 	status := loadFixtureStatus(t)

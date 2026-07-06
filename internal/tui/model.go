@@ -461,7 +461,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, previewCmd
 		}
 		if msg.err != nil {
-			m.setToast(msg.err.Error(), toastError)
+			m.setToast(humanizeCLIError(msg.err), toastError)
 		}
 		return m, nil
 	case branchListMsg:
@@ -539,15 +539,25 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	case textMsg:
+		// "message" is the pseudo-target for action output (create PR, push
+		// dry-run, resolve status, …). Errors there are CLI failures, not diff
+		// content — surface them as a clean toast instead of dumping a raw
+		// multi-line blob into the preview zone.
+		if msg.target == "message" {
+			if msg.err != nil {
+				m.setToast(humanizeCLIError(msg.err), toastError)
+				return m, nil
+			}
+			m.previewErr = nil
+			m.preview = msg.body
+			m.previewTarget = "message"
+			return m, nil
+		}
 		if msg.target == m.previewTarget {
 			m.previewErr = msg.err
 			if msg.err == nil {
 				m.preview = msg.body
 			}
-		} else if msg.target == "message" {
-			m.previewErr = msg.err
-			m.preview = msg.body
-			m.previewTarget = msg.target
 		}
 		return m, nil
 	case oplogLoadedMsg:
@@ -2019,6 +2029,32 @@ func (m Model) mutationToast(label string, status *gitbutler.WorkspaceStatus) (s
 		return "updated from upstream; conflicts detected", toastError
 	}
 	return label, toastSuccess
+}
+
+// humanizeCLIError condenses a multi-line `but` error into one concise,
+// actionable line for a toast. The forge-auth failure is special-cased because
+// it blocks every PR action and its fix (`but config forge auth`) is not
+// obvious — GitButler's forge auth is separate from `gh`'s.
+func humanizeCLIError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.TrimSpace(err.Error())
+	low := strings.ToLower(msg)
+	if strings.Contains(low, "forge auth") || strings.Contains(low, "authenticated forge") {
+		return "GitHub auth needed — run `but config forge auth` in a terminal, then retry"
+	}
+	// Otherwise collapse to the first meaningful line, dropping the generic
+	// "Error:"/"Caused by:" scaffolding `but` prints.
+	for _, line := range strings.Split(msg, "\n") {
+		line = strings.TrimSpace(line)
+		line = strings.TrimPrefix(line, "Error: ")
+		if line == "" || line == "Caused by:" {
+			continue
+		}
+		return line
+	}
+	return msg
 }
 
 func workspaceHasConflicts(status *gitbutler.WorkspaceStatus) bool {
