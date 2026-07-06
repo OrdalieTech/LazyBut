@@ -846,6 +846,52 @@ func TestUpstreamUpdateSummaryAndConflictToast(t *testing.T) {
 	}
 }
 
+// The footer must acknowledge key commands: a running action shows its label
+// with a spinner, and a fresh toast shows there too — so a keypress is never
+// silent.
+func TestFooterShowsActionStatus(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	model.data = buildWorkspaceData(loadFixtureStatus(t), loadFixtureBranches(t))
+	model.width = 120
+	model.height = 30
+
+	loading := model.startLoadingFor("creating PR", actionNewPR, "feature/ui")
+	if bar := loading.renderHotbar(); !strings.Contains(bar, "creating PR") {
+		t.Fatalf("footer missing loading label:\n%s", bar)
+	}
+
+	// Once the action finishes (loading cleared) its toast owns the footer.
+	done := model.stopLoading()
+	done.setToast("PR created", toastSuccess)
+	if bar := done.renderHotbar(); !strings.Contains(bar, "PR created") {
+		t.Fatalf("footer missing toast:\n%s", bar)
+	}
+
+	// Idle footer is just key hints — no stale status.
+	idle := model.stopLoading()
+	if bar := idle.renderHotbar(); strings.Contains(bar, "creating PR") || strings.Contains(bar, "working") {
+		t.Fatalf("idle footer should carry no status:\n%s", bar)
+	}
+}
+
+// Pressing an action key that runs async work must flip on a loading state
+// immediately, so the footer reacts on the same frame as the keypress.
+func TestAsyncActionStartsLoadingImmediately(t *testing.T) {
+	runner := &actionRunner{outputs: map[string][]byte{}}
+	model := newModel(gitbutler.NewClient(".", runner))
+	model.data = buildWorkspaceData(loadFixtureStatus(t), loadFixtureBranches(t))
+	model.laneCursor = 1 // an applied branch, so PR actions are available
+
+	next, cmd := model.execute(action{ID: actionNewDraftPR}, "")
+	m := next.(Model)
+	if !m.loading || m.loadingLabel == "" {
+		t.Fatalf("create-draft-PR should start loading immediately: loading=%v label=%q", m.loading, m.loadingLabel)
+	}
+	if cmd == nil {
+		t.Fatal("expected a command to run the PR creation")
+	}
+}
+
 func TestHumanizeCLIError(t *testing.T) {
 	forge := errors.New("Failed to create forge review for branch.\n\nCaused by:\n    No authenticated forge users found.\n    Run 'but config forge auth' to authenticate with GitHub.")
 	if got := humanizeCLIError(forge); !strings.Contains(got, "but config forge auth") || strings.Contains(got, "\n") {

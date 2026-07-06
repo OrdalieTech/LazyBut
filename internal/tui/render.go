@@ -205,9 +205,9 @@ func (m Model) renderTop() string {
 			}
 		}
 	}
-	if m.toast != "" {
-		segs = append(segs, renderToast(m.toast, m.toastKind))
-	}
+	// Toasts and user-action loading live in the footer now (renderHotbar), so
+	// feedback sits where the eye lands after a keypress. The top bar keeps only
+	// persistent workspace state plus the background-sync indicator.
 	if m.err != nil && m.hasBootstrapIssue() && !m.isBootstrapPrompt() {
 		segs = append(segs, styleWarn.Render("GitButler setup needed"))
 	}
@@ -310,11 +310,10 @@ func fetchedAgo(raw *string) string {
 	}
 }
 
-// activityIndicator returns a vivid, light-mode-safe "busy" chip for the top
-// bar, or "" when idle. User-initiated actions show their own label
-// ("pushing", "pulling", etc.); background auto-refreshes read "syncing".
-// Both route through styleLoad (bold amber) so they pop on light and dark
-// terminals alike.
+// activityIndicator returns the top bar's background-sync chip, or "" when no
+// background sync is in flight. User-initiated work (pushing, creating PR, …)
+// is surfaced in the footer via footerStatus so it sits where the eye lands
+// after a keypress; the top bar only reports the periodic auto-refresh.
 // syncIndicatorDelayFrames is how long a background sync must run before its
 // indicator appears (~630ms at the 90ms UI tick). Periodic auto-refreshes
 // almost always finish faster than this, so the bar no longer flashes on every
@@ -322,27 +321,15 @@ func fetchedAgo(raw *string) string {
 const syncIndicatorDelayFrames = 7
 
 func (m Model) activityIndicator() string {
-	var label string
-	switch {
-	case m.loading:
-		// User-initiated / blocking work — surface immediately with the
-		// action-specific label if we have one.
-		label = m.loadingLabel
-		if label == "" {
-			label = "working"
-		}
-	case m.autoRefreshInFlight:
-		if m.spinnerFrame-m.autoRefreshStartFrame < syncIndicatorDelayFrames {
-			return ""
-		}
-		label = "syncing"
-	default:
+	if !m.autoRefreshInFlight {
+		return ""
+	}
+	if m.spinnerFrame-m.autoRefreshStartFrame < syncIndicatorDelayFrames {
 		return ""
 	}
 	// Steady ball spinner — constant width so the chips that follow don't
 	// shuffle frame to frame.
-	return styleLoad.Render(spinnerFrame(m.spinnerFrame)) + " " +
-		styleLoad.Render(label)
+	return styleLoad.Render(spinnerFrame(m.spinnerFrame)) + " " + styleLoad.Render("syncing")
 }
 
 func spinnerFrame(frame int) string {
@@ -1722,6 +1709,26 @@ func looksLikeDiffGutter(s string) bool {
 	return hasDigit
 }
 
+// footerStatus is the transient feedback shown at the left of the footer: the
+// in-progress label for a user-initiated action (spinner) or the most recent
+// toast. It lives in the footer because that's where the eye lands after a
+// keypress, so every command gets an immediate, visible acknowledgement.
+// Background auto-refresh stays in the top bar ("syncing") — the footer is for
+// what *you* just did.
+func (m Model) footerStatus() string {
+	if m.loading {
+		label := m.loadingLabel
+		if label == "" {
+			label = "working"
+		}
+		return styleLoad.Render(spinnerFrame(m.spinnerFrame)+" "+label)
+	}
+	if m.toast != "" {
+		return renderToast(m.toast, m.toastKind)
+	}
+	return ""
+}
+
 func (m Model) renderHotbar() string {
 	actions := []hint{}
 	for _, a := range m.contextActions() {
@@ -1742,15 +1749,25 @@ func (m Model) renderHotbar() string {
 		}
 		return strings.Join(parts, sep)
 	}
-	// Drop trailing actions until the full bar fits — meta keys are always preserved.
+
+	// The status prefix is priority feedback and always kept; key hints get the
+	// remaining width, dropping trailing actions (then truncating) to fit.
+	prefix := ""
+	budget := m.width
+	if status := m.footerStatus(); status != "" {
+		prefix = status + sep
+		budget = m.width - lipgloss.Width(prefix)
+		if budget <= 0 {
+			return fit(status, m.width)
+		}
+	}
 	for {
 		line := render(append(append([]hint{}, actions...), meta...))
-		if lipgloss.Width(line) <= m.width {
-			return line
+		if lipgloss.Width(line) <= budget {
+			return prefix + line
 		}
 		if len(actions) == 0 {
-			// Even meta overflows — just truncate.
-			return fit(line, m.width)
+			return prefix + fit(line, budget)
 		}
 		actions = actions[:len(actions)-1]
 	}

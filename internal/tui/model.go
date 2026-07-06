@@ -544,6 +544,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// content — surface them as a clean toast instead of dumping a raw
 		// multi-line blob into the preview zone.
 		if msg.target == "message" {
+			loadingAction := m.loadingAction
+			m = m.stopLoading()
 			if msg.err != nil {
 				m.setToast(humanizeCLIError(msg.err), toastError)
 				return m, nil
@@ -551,6 +553,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.previewErr = nil
 			m.preview = msg.body
 			m.previewTarget = "message"
+			// PR creation output lands in the preview, which is easy to miss —
+			// confirm it with a toast so the keypress has a clear result.
+			if loadingAction == actionNewPR || loadingAction == actionNewDraftPR {
+				m.setToast("PR created", toastSuccess)
+			}
 			return m, nil
 		}
 		if msg.target == m.previewTarget {
@@ -1619,7 +1626,7 @@ func (m Model) execute(action action, input string) (tea.Model, tea.Cmd) {
 		})
 	case actionPullCheck:
 		summary := m.upstreamUpdateSummary()
-		return m, m.textCmd("message", func() (string, error) {
+		return m.startLoading("checking upstream"), m.textCmd("message", func() (string, error) {
 			out, err := m.client.PullCheck(ctx)
 			if err != nil {
 				return "", err
@@ -1635,15 +1642,15 @@ func (m Model) execute(action action, input string) (tea.Model, tea.Cmd) {
 			return m.client.Push(ctx, branchRef, false)
 		})
 	case actionPushDryRun:
-		return m, m.textCmd("message", func() (string, error) { return m.client.PushDryRun(ctx, branchRef) })
+		return m.startLoadingFor("checking push", actionPushDryRun, branchRef), m.textCmd("message", func() (string, error) { return m.client.PushDryRun(ctx, branchRef) })
 	case actionForcePush:
 		return m.startLoadingFor("force pushing", actionForcePush, branchRef), m.mutationCmd("force pushed", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Push(ctx, branchRef, true)
 		})
 	case actionNewPR:
-		return m, m.textCmd("message", func() (string, error) { return m.client.NewPR(ctx, branchRef, false) })
+		return m.startLoadingFor("creating PR", actionNewPR, branchRef), m.textCmd("message", func() (string, error) { return m.client.NewPR(ctx, branchRef, false) })
 	case actionNewDraftPR:
-		return m, m.textCmd("message", func() (string, error) { return m.client.NewPR(ctx, branchRef, true) })
+		return m.startLoadingFor("creating draft PR", actionNewDraftPR, branchRef), m.textCmd("message", func() (string, error) { return m.client.NewPR(ctx, branchRef, true) })
 	case actionPRDraft:
 		return m.startLoading("setting PR draft"), m.mutationCmd("PR set draft", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.SetPRDraft(ctx, branchRef)
@@ -1664,7 +1671,7 @@ func (m Model) execute(action action, input string) (tea.Model, tea.Cmd) {
 		m.setToast("copied PR URL: "+selectedLane.ReviewURL, toastSuccess)
 		return m, nil
 	case actionResolveStatus:
-		return m, m.textCmd("message", func() (string, error) { return m.client.ResolveStatus(ctx) })
+		return m.startLoading("checking resolve"), m.textCmd("message", func() (string, error) { return m.client.ResolveStatus(ctx) })
 	case actionResolveFinish:
 		return m.startLoading("finishing resolve"), m.mutationCmd("resolution finished", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.ResolveFinish(ctx)
@@ -1678,13 +1685,13 @@ func (m Model) execute(action action, input string) (tea.Model, tea.Cmd) {
 			return m.client.Undo(ctx)
 		})
 	case actionSnapshot:
-		return m, m.textCmd("message", func() (string, error) { return m.client.OplogSnapshot(ctx, input) })
+		return m.startLoading("snapshotting"), m.textCmd("message", func() (string, error) { return m.client.OplogSnapshot(ctx, input) })
 	case actionRestore:
 		return m.startLoading("restoring snapshot"), m.mutationCmd("snapshot restored", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.OplogRestore(ctx, input)
 		})
 	case actionCleanDryRun:
-		return m, m.textCmd("message", func() (string, error) { return m.client.CleanDryRun(ctx) })
+		return m.startLoading("checking clean"), m.textCmd("message", func() (string, error) { return m.client.CleanDryRun(ctx) })
 	case actionClean:
 		return m.startLoading("cleaning"), m.mutationCmd("cleaned", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.Clean(ctx)
