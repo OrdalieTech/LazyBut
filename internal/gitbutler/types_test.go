@@ -32,6 +32,22 @@ func TestWorkspaceStatusUnmarshal(t *testing.T) {
 	}
 }
 
+// Current `but` builds renamed the zz-lane key from `unassignedChanges` to
+// `uncommittedChanges`; both must populate UnassignedChanges.
+func TestWorkspaceStatusAcceptsUncommittedChangesKey(t *testing.T) {
+	raw := []byte(`{"uncommittedChanges":[{"cliId":"yrp","filePath":"a.go","changeType":"added"},{"cliId":"ks","filePath":"b.go","changeType":"modified"}],"stacks":[]}`)
+	var status WorkspaceStatus
+	if err := json.Unmarshal(raw, &status); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(status.UnassignedChanges); got != 2 {
+		t.Fatalf("unassigned changes = %d, want 2", got)
+	}
+	if status.UnassignedChanges[0].FilePath != "a.go" {
+		t.Fatalf("file path = %q", status.UnassignedChanges[0].FilePath)
+	}
+}
+
 func TestBranchListUnmarshal(t *testing.T) {
 	raw, err := os.ReadFile("testdata/branch_list.json")
 	if err != nil {

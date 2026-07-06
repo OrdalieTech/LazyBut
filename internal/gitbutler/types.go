@@ -14,6 +14,25 @@ type WorkspaceStatus struct {
 	UpstreamState     UpstreamState `json:"upstreamState"`
 }
 
+// UnmarshalJSON accepts both the historical `unassignedChanges` key and the
+// newer `uncommittedChanges` key that current `but` builds emit for the zz
+// lane. Without this, a CLI upgrade silently empties the unassigned column.
+func (w *WorkspaceStatus) UnmarshalJSON(raw []byte) error {
+	type ws WorkspaceStatus // strip the custom method to avoid recursion
+	var shadow struct {
+		ws
+		Uncommitted []FileChange `json:"uncommittedChanges"`
+	}
+	if err := json.Unmarshal(raw, &shadow); err != nil {
+		return err
+	}
+	*w = WorkspaceStatus(shadow.ws)
+	if len(w.UnassignedChanges) == 0 {
+		w.UnassignedChanges = shadow.Uncommitted
+	}
+	return nil
+}
+
 type UpstreamState struct {
 	Behind          int      `json:"behind"`
 	LatestCommit    Commit   `json:"latestCommit"`
