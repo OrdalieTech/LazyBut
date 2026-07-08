@@ -80,7 +80,7 @@ func TestClientStatusEnrichesMissingGitHubPR(t *testing.T) {
 	}`)
 	butRunner := &fakeRunner{outputs: map[string][]byte{"status -j": statusRaw}}
 	ghRunner := &fakeRunner{outputs: map[string][]byte{
-		"pr list --state open --json number,url,headRefName --limit 1000": []byte(`[{"number":781,"url":"https://github.com/OrdalieTech/Ordalie-back/pull/781","headRefName":"glose-os-poc"}]`),
+		"pr list --state all --json number,url,headRefName,state,mergedAt --limit 1000": []byte(`[{"number":781,"url":"https://github.com/OrdalieTech/Ordalie-back/pull/781","headRefName":"glose-os-poc","state":"MERGED","mergedAt":"2026-07-08T13:08:08Z"}]`),
 	}}
 	client := NewClient(".", butRunner)
 	client.GHRunner = ghRunner
@@ -95,6 +95,12 @@ func TestClientStatusEnrichesMissingGitHubPR(t *testing.T) {
 	}
 	if branch.ReviewURL == nil || *branch.ReviewURL != "https://github.com/OrdalieTech/Ordalie-back/pull/781" {
 		t.Fatalf("review url = %#v", branch.ReviewURL)
+	}
+	if branch.ReviewState == nil || *branch.ReviewState != "MERGED" {
+		t.Fatalf("review state = %#v, want MERGED", branch.ReviewState)
+	}
+	if branch.ReviewMergedAt == nil || *branch.ReviewMergedAt == "" {
+		t.Fatalf("review merged at = %#v, want timestamp", branch.ReviewMergedAt)
 	}
 
 	if _, err := client.Status(context.Background()); err != nil {
@@ -112,7 +118,7 @@ func TestClientBranchListEnrichesMissingGitHubPR(t *testing.T) {
 	}`)
 	butRunner := &fakeRunner{outputs: map[string][]byte{"branch list -j --all": branchRaw}}
 	ghRunner := &fakeRunner{outputs: map[string][]byte{
-		"pr list --state open --json number,url,headRefName --limit 1000": []byte(`[{"number":781,"url":"https://github.com/OrdalieTech/Ordalie-back/pull/781","headRefName":"glose-os-poc"}]`),
+		"pr list --state all --json number,url,headRefName,state,mergedAt --limit 1000": []byte(`[{"number":781,"url":"https://github.com/OrdalieTech/Ordalie-back/pull/781","headRefName":"glose-os-poc","state":"OPEN"}]`),
 	}}
 	client := NewClient(".", butRunner)
 	client.GHRunner = ghRunner
@@ -122,7 +128,7 @@ func TestClientBranchListEnrichesMissingGitHubPR(t *testing.T) {
 		t.Fatal(err)
 	}
 	reviews := branches.AppliedStacks[0].Heads[0].Reviews
-	if len(reviews) != 1 || reviews[0].Number != 781 || reviews[0].URL == "" {
+	if len(reviews) != 1 || reviews[0].Number != 781 || reviews[0].URL == "" || reviews[0].State != "OPEN" {
 		t.Fatalf("reviews = %#v", reviews)
 	}
 }

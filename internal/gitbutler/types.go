@@ -54,6 +54,8 @@ type Branch struct {
 	BranchStatus    StatusText `json:"branchStatus"`
 	ReviewID        *string    `json:"reviewId"`
 	ReviewURL       *string    `json:"reviewUrl"`
+	ReviewState     *string    `json:"reviewState"`
+	ReviewMergedAt  *string    `json:"reviewMergedAt"`
 	CI              *CI        `json:"ci"`
 	MergeStatus     StatusText `json:"mergeStatus"`
 }
@@ -133,8 +135,10 @@ type OplogDetails struct {
 }
 
 type Review struct {
-	Number uint64 `json:"number"`
-	URL    string `json:"url"`
+	Number   uint64 `json:"number"`
+	URL      string `json:"url"`
+	State    string `json:"state"`
+	MergedAt string `json:"mergedAt"`
 }
 
 type StatusAfter struct {

@@ -52,7 +52,7 @@ const (
 	githubPRCacheTTL  = time.Minute
 	githubPRErrorTTL  = 2 * time.Minute
 	githubPRListLimit = "1000"
-	githubPRTimeout   = 2 * time.Second
+	githubPRTimeout   = 8 * time.Second
 )
 
 func NewClient(dir string, runner Runner) *Client {
@@ -159,6 +159,14 @@ func (c *Client) enrichStatusWithGitHubPRs(ctx context.Context, status *Workspac
 				url := pr.URL
 				branch.ReviewURL = &url
 			}
+			if branch.ReviewState == nil || *branch.ReviewState == "" {
+				state := pr.State
+				branch.ReviewState = &state
+			}
+			if branch.ReviewMergedAt == nil || *branch.ReviewMergedAt == "" {
+				mergedAt := pr.MergedAt
+				branch.ReviewMergedAt = &mergedAt
+			}
 		}
 	}
 }
@@ -169,7 +177,8 @@ func statusNeedsGitHubPRs(status *WorkspaceStatus) bool {
 			if branch.Name == "" {
 				continue
 			}
-			if branch.ReviewID == nil || *branch.ReviewID == "" || branch.ReviewURL == nil || *branch.ReviewURL == "" {
+			if branch.ReviewID == nil || *branch.ReviewID == "" || branch.ReviewURL == nil || *branch.ReviewURL == "" ||
+				branch.ReviewState == nil || *branch.ReviewState == "" {
 				return true
 			}
 		}
@@ -213,11 +222,21 @@ func branchListNeedsGitHubPRs(branches *BranchList) bool {
 			if head.Name != "" && len(head.Reviews) == 0 {
 				return true
 			}
+			for _, review := range head.Reviews {
+				if review.State == "" {
+					return true
+				}
+			}
 		}
 	}
 	for _, branch := range branches.Branches {
 		if branch.Name != "" && len(branch.Reviews) == 0 {
 			return true
+		}
+		for _, review := range branch.Reviews {
+			if review.State == "" {
+				return true
+			}
 		}
 	}
 	return false
@@ -227,6 +246,8 @@ type githubPullRequest struct {
 	Number      uint64 `json:"number"`
 	URL         string `json:"url"`
 	HeadRefName string `json:"headRefName"`
+	State       string `json:"state"`
+	MergedAt    string `json:"mergedAt"`
 }
 
 func (c *Client) githubPullRequests(ctx context.Context) map[string]Review {
@@ -250,7 +271,7 @@ func (c *Client) githubPullRequests(ctx context.Context) map[string]Review {
 	ghCtx, cancel := context.WithTimeout(ctx, githubPRTimeout)
 	defer cancel()
 	var raw []githubPullRequest
-	if err := c.runGHJSON(ghCtx, &raw, "pr", "list", "--state", "open", "--json", "number,url,headRefName", "--limit", githubPRListLimit); err != nil {
+	if err := c.runGHJSON(ghCtx, &raw, "pr", "list", "--state", "all", "--json", "number,url,headRefName,state,mergedAt", "--limit", githubPRListLimit); err != nil {
 		c.githubMu.Lock()
 		c.githubPRErrorBackoff = time.Now().Add(githubPRErrorTTL)
 		c.githubMu.Unlock()
@@ -265,7 +286,7 @@ func (c *Client) githubPullRequests(ctx context.Context) map[string]Review {
 		if _, exists := prs[pr.HeadRefName]; exists {
 			continue
 		}
-		prs[pr.HeadRefName] = Review{Number: pr.Number, URL: pr.URL}
+		prs[pr.HeadRefName] = Review{Number: pr.Number, URL: pr.URL, State: pr.State, MergedAt: pr.MergedAt}
 	}
 
 	c.githubMu.Lock()

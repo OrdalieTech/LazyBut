@@ -1336,9 +1336,15 @@ func (m Model) laneFooterLine(lane lane, width int) string {
 
 	// PR indicator — informational, lowest priority.
 	if lane.ReviewID != "" {
+		label := "PR " + cleanReviewID(lane.ReviewID)
+		compact := cleanReviewID(lane.ReviewID)
+		if reviewMerged(lane) {
+			label += " merged"
+			compact += " merged"
+		}
 		items = append(items, item{
-			full:     styleHotKey.Render("PR " + cleanReviewID(lane.ReviewID)),
-			compact:  styleHotKey.Render(cleanReviewID(lane.ReviewID)),
+			full:     styleHotKey.Render(label),
+			compact:  styleHotKey.Render(compact),
 			priority: 6,
 		})
 	}
@@ -1721,7 +1727,7 @@ func (m Model) footerStatus() string {
 		if label == "" {
 			label = "working"
 		}
-		return styleLoad.Render(spinnerFrame(m.spinnerFrame)+" "+label)
+		return styleLoad.Render(spinnerFrame(m.spinnerFrame) + " " + label)
 	}
 	if m.toast != "" {
 		return renderToast(m.toast, m.toastKind)
@@ -1987,18 +1993,39 @@ func (m Model) renderConfirm() string {
 func (m Model) renderUpstreamConfirm() string {
 	width := m.modalWidth(80, 48)
 	innerW := width - 6
-	lanes := m.upstreamBranchLanes()
+	lanes := m.upstreamConfirmLanes()
 	incoming := m.incomingChangeCount()
+	mergedCleanup := len(m.mergedUpstreamBranchLanes())
 	if len(lanes) > 0 && m.confirm.Cursor >= len(lanes) {
 		m.confirm.Cursor = len(lanes) - 1
 	}
 	hasConflicts := m.hasUpstreamConflicts()
 
 	title := styleAccent.Render("update from upstream")
-	subtitle := styleDim.Render(plural(incoming, "incoming change", "incoming changes"))
+	subtitleParts := []string{}
+	if incoming > 0 {
+		subtitleParts = append(subtitleParts, plural(incoming, "incoming change", "incoming changes"))
+	} else {
+		subtitleParts = append(subtitleParts, "0 incoming changes")
+	}
+	if mergedCleanup > 0 {
+		subtitleParts = append(subtitleParts, plural(mergedCleanup, "merged branch cleanup", "merged branch cleanups"))
+	}
+	subtitle := styleDim.Render(strings.Join(subtitleParts, " "+sepDot+" "))
 
-	rows := []string{subtitle, "", m.renderIncomingCard(innerW)}
-	rows = append(rows, "", styleDim.Render("branches to rebase"))
+	rows := []string{subtitle}
+	if incoming > 0 {
+		rows = append(rows, "", m.renderIncomingCard(innerW))
+	} else if mergedCleanup > 0 {
+		rows = append(rows, "", styleMerged.Render(glyphMerged+" merged branches will be removed by `but pull`"))
+	}
+	branchLabel := "branches to rebase"
+	if incoming == 0 && mergedCleanup > 0 {
+		branchLabel = "branches to clean"
+	} else if mergedCleanup > 0 {
+		branchLabel = "branches to update/clean"
+	}
+	rows = append(rows, "", styleDim.Render(branchLabel))
 	rows = append(rows, m.renderUpstreamBranchList(lanes, innerW, m.upstreamBranchRowBudget(len(lanes)), m.confirm.Cursor))
 	if hasConflicts {
 		rows = append(rows, "", styleErr.Render(glyphConflict+" known conflicts — review before applying"))
@@ -2065,7 +2092,7 @@ func upstreamBranchRow(lane lane, width int, selected bool) string {
 	switch {
 	case lane.MergeClean != nil && !*lane.MergeClean:
 		right = styleErr.Render(glyphConflict + " conflict")
-	case lane.PushStatus == "integrated":
+	case branchMergedUpstream(lane):
 		right = styleMerged.Render(glyphMerged + " merged")
 	}
 	line := prefix + name
@@ -2091,7 +2118,7 @@ func (m Model) upstreamBranchRowBudget(total int) int {
 }
 
 func (m Model) upstreamConfirmRowAt(y int) (int, bool) {
-	lanes := m.upstreamBranchLanes()
+	lanes := m.upstreamConfirmLanes()
 	if len(lanes) == 0 {
 		return 0, false
 	}
@@ -2111,7 +2138,7 @@ func (m Model) upstreamConfirmRowAt(y int) (int, bool) {
 }
 
 func (m Model) isUpstreamConfirmFooter(x, y int) bool {
-	visible := m.upstreamBranchRowBudget(len(m.upstreamBranchLanes()))
+	visible := m.upstreamBranchRowBudget(len(m.upstreamConfirmLanes()))
 	fixedAbove := 10
 	conflictRows := 0
 	if m.hasUpstreamConflicts() {
@@ -2131,6 +2158,13 @@ func (m Model) upstreamBranchLanes() []lane {
 		}
 	}
 	return out
+}
+
+func (m Model) upstreamConfirmLanes() []lane {
+	if m.incomingChangeCount() == 0 && len(m.mergedUpstreamBranchLanes()) > 0 {
+		return m.mergedUpstreamBranchLanes()
+	}
+	return m.upstreamBranchLanes()
 }
 
 func (m Model) hasUpstreamConflicts() bool {
@@ -2521,6 +2555,9 @@ func syncSummary(lane lane) (behind, ahead int, forceRequired, synced, integrate
 		return 0, 0, false, false, false
 	}
 	behind = lane.UpstreamCount
+	if branchMergedUpstream(lane) {
+		return behind, 0, false, false, true
+	}
 	switch lane.PushStatus {
 	case "integrated":
 		// Branch has been merged into the target — no push needed, branch is shippable.
@@ -2540,6 +2577,14 @@ func syncSummary(lane lane) (behind, ahead int, forceRequired, synced, integrate
 		}
 	}
 	return
+}
+
+func reviewMerged(lane lane) bool {
+	return strings.EqualFold(lane.ReviewState, "MERGED") || lane.ReviewMergedAt != ""
+}
+
+func branchMergedUpstream(lane lane) bool {
+	return lane.PushStatus == "integrated" || reviewMerged(lane)
 }
 
 // syncChip mirrors LazyGit's ↓N↑M compact indicator with color.

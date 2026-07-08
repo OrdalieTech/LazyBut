@@ -404,6 +404,29 @@ func TestLaneFooterShowsPullLoadingWithoutBehindArrow(t *testing.T) {
 	}
 }
 
+func TestLaneFooterShowsMergedReviewInsteadOfSynced(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	lane := lane{
+		Kind:        laneAppliedBranch,
+		Name:        "feat/org-usage-dashboard",
+		PushStatus:  "nothingToPush",
+		CommitCount: 3,
+		ReviewID:    "825",
+		ReviewState: "MERGED",
+	}
+
+	footer := model.laneFooterLine(lane, 80)
+	if !strings.Contains(footer, "PR #825 merged") {
+		t.Fatalf("footer should expose merged PR state: %q", footer)
+	}
+	if !strings.Contains(footer, "merged") {
+		t.Fatalf("footer should expose merged sync state: %q", footer)
+	}
+	if strings.Contains(footer, "synced") {
+		t.Fatalf("merged review should not look merely synced: %q", footer)
+	}
+}
+
 func TestKanbanColumnKeepsFooterWithMultilineCommitMessage(t *testing.T) {
 	status := loadFixtureStatus(t)
 	branch := &status.Stacks[0].Branches[0]
@@ -478,6 +501,32 @@ func TestUpstreamConfirmMirrorsGitButlerDialogShape(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("upstream confirm should contain %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestUpstreamConfirmShowsMergedBranchCleanup(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	status := loadFixtureStatus(t)
+	status.UpstreamState.Behind = 0
+	status.UpstreamState.LatestCommit = status.MergeBase
+	status.UpstreamState.UpstreamCommits = nil
+	state := "MERGED"
+	status.Stacks[0].Branches[0].ReviewState = &state
+	status.Stacks[0].Branches[0].BranchStatus = gitbutler.StatusText("nothingToPush")
+	status.Stacks[0].Branches[0].MergeStatus = gitbutler.StatusText("clean")
+	model.data = buildWorkspaceData(status, loadFixtureBranches(t))
+	model.data.Lanes = append(model.data.Lanes, lane{Kind: laneAppliedBranch, Name: "feature/second"})
+	model.width = 110
+	model.height = 36
+
+	view := model.renderUpstreamConfirm()
+	for _, want := range []string{"merged branch cleanup", "merged branches will be removed", "feature/ui", "merged"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("upstream cleanup confirm should contain %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "feature/second") {
+		t.Fatalf("cleanup-only confirm should hide non-merged branches:\n%s", view)
 	}
 }
 

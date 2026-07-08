@@ -67,6 +67,23 @@ func TestBuildWorkspaceDataUsesBranchListReviewID(t *testing.T) {
 	}
 }
 
+func TestBuildWorkspaceDataUsesBranchReviewState(t *testing.T) {
+	status := loadFixtureStatus(t)
+	state := "MERGED"
+	mergedAt := "2026-07-08T13:08:08Z"
+	status.Stacks[0].Branches[0].ReviewState = &state
+	status.Stacks[0].Branches[0].ReviewMergedAt = &mergedAt
+
+	data := buildWorkspaceData(status, loadFixtureBranches(t))
+	lane := data.Lanes[1]
+	if lane.ReviewState != "MERGED" {
+		t.Fatalf("review state = %q", lane.ReviewState)
+	}
+	if lane.ReviewMergedAt != mergedAt {
+		t.Fatalf("review merged at = %q", lane.ReviewMergedAt)
+	}
+}
+
 func TestBuildFastWorkspaceData(t *testing.T) {
 	data := buildFastWorkspaceData([]gitbutler.FileChange{{
 		CLIID:      "git:main.go",
@@ -98,5 +115,31 @@ func TestContentForAppliedBranch(t *testing.T) {
 	}
 	if items[1].Kind != contentCommit || !strings.Contains(items[1].Label, "tui shell") {
 		t.Fatalf("commit item = %#v", items[1])
+	}
+}
+
+func TestContentForAppliedBranchSurfacesUpstreamCommitsBeforeLocalStack(t *testing.T) {
+	status := loadFixtureStatus(t)
+	stack := &status.Stacks[0]
+	branch := &stack.Branches[0]
+	stack.AssignedChanges = nil
+	branch.Commits = []gitbutler.Commit{
+		{CLIID: "l1", CommitID: "local-1", Message: "local one"},
+		{CLIID: "l2", CommitID: "local-2", Message: "local two"},
+	}
+	branch.UpstreamCommits = []gitbutler.Commit{
+		{CLIID: "u1", CommitID: "upstream-1", Message: "Merge pull request #825"},
+	}
+
+	data := buildWorkspaceData(status, loadFixtureBranches(t))
+	items := data.ContentFor(1)
+	if len(items) != 3 {
+		t.Fatalf("content items = %#v", items)
+	}
+	if items[0].Kind != contentUpstreamCommit || items[0].ID != "u1" {
+		t.Fatalf("first item should be upstream/foreign pull commit: %#v", items[0])
+	}
+	if items[1].Kind != contentCommit || items[1].ID != "l1" {
+		t.Fatalf("local commits should follow upstream commits: %#v", items[1])
 	}
 }

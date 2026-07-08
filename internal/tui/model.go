@@ -448,7 +448,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m = m.replaceData(msg.status, msg.branches)
-		if m.incomingChangeCount() == 0 {
+		if !m.hasUpstreamWork() {
 			m.setToast("no upstream update", toastInfo)
 			return m.withPreview()
 		}
@@ -963,7 +963,7 @@ func (m Model) cancelConfirm() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleUpstreamConfirmKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
-	branchCount := len(m.upstreamBranchLanes())
+	branchCount := len(m.upstreamConfirmLanes())
 	switch key.String() {
 	case "j", "down":
 		if branchCount > 0 {
@@ -1013,7 +1013,7 @@ func (m Model) handleConfirmMouse(mouse tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	lanes := m.upstreamBranchLanes()
+	lanes := m.upstreamConfirmLanes()
 	switch mouse.Button {
 	case tea.MouseButtonWheelUp:
 		m.confirm.Cursor = max(0, m.confirm.Cursor-1)
@@ -1371,7 +1371,7 @@ func (m Model) startAction(action action) (tea.Model, tea.Cmd) {
 		m = m.startLoading("loading snapshots")
 		return m, m.oplogListCmd()
 	}
-	if action.ID == actionPull && m.incomingChangeCount() == 0 {
+	if action.ID == actionPull && !m.hasUpstreamWork() {
 		return m.startLoading("checking upstream"), m.upstreamRefreshCmd()
 	}
 	// Some actions are best served by a picker instead of free-text input.
@@ -1999,12 +1999,16 @@ func (m Model) upstreamUpdateSummary() string {
 		return "Current status unavailable."
 	}
 	branches, conflicts := m.upstreamBranchSummary()
+	mergedBranches := m.mergedUpstreamBranchNames()
 
 	lines := []string{}
 	if incoming := m.incomingChangeCount(); incoming > 0 {
 		lines = append(lines, fmt.Sprintf("Incoming target commits: %d", incoming))
 	} else {
 		lines = append(lines, "Incoming target commits: none detected")
+	}
+	if len(mergedBranches) > 0 {
+		lines = append(lines, "Merged branches to clean: "+summaryList(mergedBranches, "none"))
 	}
 	lines = append(lines, "Applied branches to update: "+summaryList(branches, "none"))
 	lines = append(lines, "Known conflicts: "+summaryList(conflicts, "none"))
@@ -2024,6 +2028,29 @@ func (m Model) upstreamBranchSummary() ([]string, []string) {
 		}
 	}
 	return branches, conflicts
+}
+
+func (m Model) hasUpstreamWork() bool {
+	return m.incomingChangeCount() > 0 || len(m.mergedUpstreamBranchLanes()) > 0
+}
+
+func (m Model) mergedUpstreamBranchLanes() []lane {
+	out := []lane{}
+	for _, lane := range m.data.Lanes {
+		if lane.Kind == laneAppliedBranch && branchMergedUpstream(lane) {
+			out = append(out, lane)
+		}
+	}
+	return out
+}
+
+func (m Model) mergedUpstreamBranchNames() []string {
+	lanes := m.mergedUpstreamBranchLanes()
+	names := make([]string, 0, len(lanes))
+	for _, lane := range lanes {
+		names = append(names, lane.Name)
+	}
+	return names
 }
 
 func formatPullCheckOutput(summary, out string) string {

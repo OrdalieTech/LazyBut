@@ -1024,6 +1024,28 @@ func TestUpdateFromUpstreamRefreshesBeforeSayingNoUpdate(t *testing.T) {
 	}
 }
 
+func TestUpdateFromUpstreamOpensConfirmForMergedBranchCleanup(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	status := loadFixtureStatus(t)
+	status.UpstreamState.Behind = 0
+	status.UpstreamState.LatestCommit = status.MergeBase
+	status.UpstreamState.UpstreamCommits = nil
+	state := "MERGED"
+	status.Stacks[0].Branches[0].ReviewState = &state
+	status.Stacks[0].Branches[0].BranchStatus = gitbutler.StatusText("nothingToPush")
+	status.Stacks[0].Branches[0].MergeStatus = gitbutler.StatusText("clean")
+
+	model.data = buildWorkspaceData(status, loadFixtureBranches(t))
+	nextModel, cmd := model.startAction(action{ID: actionPull, ConfirmText: model.upstreamUpdateConfirmText()})
+	next := nextModel.(Model)
+	if cmd != nil {
+		t.Fatal("merged branch cleanup should not refresh before opening the pull confirm")
+	}
+	if next.mode != modeConfirm || next.confirm.Action.ID != actionPull {
+		t.Fatalf("mode/action = %d/%q, want pull confirm", next.mode, next.confirm.Action.ID)
+	}
+}
+
 func TestStartupRefreshMsgStartsInitialStatusLoad(t *testing.T) {
 	statusRaw, err := json.Marshal(loadFixtureStatus(t))
 	if err != nil {

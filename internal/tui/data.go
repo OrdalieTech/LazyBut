@@ -35,6 +35,8 @@ type lane struct {
 	CIPendingTitles []string // individual pending check names
 	ReviewID        string   // pull-request id parsed from branch.ReviewID
 	ReviewURL       string   // PR URL from branch list reviews (when available)
+	ReviewState     string   // PR state from GitHub when available
+	ReviewMergedAt  string   // PR merge timestamp from GitHub when available
 	LastCommitAt    string   // RFC3339 timestamp of the most recent commit (commits only)
 	LastAuthor      string   // author of the most recent commit (commits only)
 }
@@ -88,12 +90,24 @@ func buildWorkspaceData(status *gitbutler.WorkspaceStatus, branches *gitbutler.B
 	// when status only gives us part of the review data.
 	reviewIDs := map[string]string{}
 	reviewURLs := map[string]string{}
+	reviewStates := map[string]string{}
+	reviewMergedAt := map[string]string{}
 	if branches != nil {
 		for _, stack := range branches.AppliedStacks {
 			for _, head := range stack.Heads {
 				for _, r := range head.Reviews {
-					reviewIDs[head.Name] = reviewIDString(r.Number)
-					reviewURLs[head.Name] = r.URL
+					if id := reviewIDString(r.Number); id != "" {
+						reviewIDs[head.Name] = id
+					}
+					if r.URL != "" {
+						reviewURLs[head.Name] = r.URL
+					}
+					if r.State != "" {
+						reviewStates[head.Name] = r.State
+					}
+					if r.MergedAt != "" {
+						reviewMergedAt[head.Name] = r.MergedAt
+					}
 				}
 			}
 		}
@@ -145,6 +159,12 @@ func buildWorkspaceData(status *gitbutler.WorkspaceStatus, branches *gitbutler.B
 			if branch.ReviewURL != nil {
 				ln.ReviewURL = *branch.ReviewURL
 			}
+			if branch.ReviewState != nil {
+				ln.ReviewState = *branch.ReviewState
+			}
+			if branch.ReviewMergedAt != nil {
+				ln.ReviewMergedAt = *branch.ReviewMergedAt
+			}
 			if ln.ReviewID == "" {
 				if id, ok := reviewIDs[branch.Name]; ok {
 					ln.ReviewID = id
@@ -152,6 +172,12 @@ func buildWorkspaceData(status *gitbutler.WorkspaceStatus, branches *gitbutler.B
 			}
 			if url, ok := reviewURLs[branch.Name]; ok {
 				ln.ReviewURL = url
+			}
+			if state, ok := reviewStates[branch.Name]; ok {
+				ln.ReviewState = state
+			}
+			if mergedAt, ok := reviewMergedAt[branch.Name]; ok {
+				ln.ReviewMergedAt = mergedAt
 			}
 			if len(branch.Commits) > 0 {
 				ln.LastCommitAt = branch.Commits[0].CreatedAt
@@ -227,11 +253,11 @@ func (d workspaceData) ContentFor(index int) []contentItem {
 			return []contentItem{{Kind: contentSummary, Label: selected.Name, Detail: "branch not found in status"}}
 		}
 		items := changesToContent(stack.AssignedChanges)
-		for _, commit := range branch.Commits {
-			items = append(items, commitToContent(commit, contentCommit, selected.ReviewURL))
-		}
 		for _, commit := range branch.UpstreamCommits {
 			items = append(items, commitToContent(commit, contentUpstreamCommit, selected.ReviewURL))
+		}
+		for _, commit := range branch.Commits {
+			items = append(items, commitToContent(commit, contentCommit, selected.ReviewURL))
 		}
 		if len(items) == 0 {
 			items = append(items, contentItem{Kind: contentSummary, Label: selected.Name, Detail: "no assigned changes or commits"})
