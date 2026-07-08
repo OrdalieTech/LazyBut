@@ -124,7 +124,7 @@ go run ./cmd/lazybut -C /path/to/gitbutler/repo -snapshot 120x36
 - `o`: create PR
 - `O`: create draft PR
 - `u`: non-mutating upstream check (`but pull --check`)
-- `p`: refresh upstream state; if updates exist, open the update workspace flow (`but pull`)
+- `p`: refresh upstream state; if updates or merged branch cleanups exist, open the update workspace flow
 - `U`: uncommit selected commit
 - `z`: undo last GitButler operation
 - `:`: action palette
@@ -136,9 +136,10 @@ LazyBut models GitButler desktop's "Update workspace" flow for the terminal:
 
 - `p` first refreshes GitButler state when no incoming update is currently known.
 - If there is nothing to pull, it shows `no upstream update`.
-- If the target branch has incoming commits, it opens a navigable update modal.
+- If the target branch has incoming commits or a PR-merged branch can be cleaned, it opens a navigable update modal.
 - `u` remains available for a non-mutating check before running the update.
 - `y` / `enter` runs `but pull`, which fetches the target branch and rebases/restacks applied branches.
+- When the modal lists merged branch cleanups, `y` / `enter` also deletes those local branches with `but branch delete --force`.
 - Conflicts reported by GitButler are surfaced in the TUI.
 
 ## Architecture

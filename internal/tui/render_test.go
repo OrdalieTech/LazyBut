@@ -520,7 +520,7 @@ func TestUpstreamConfirmShowsMergedBranchCleanup(t *testing.T) {
 	model.height = 36
 
 	view := model.renderUpstreamConfirm()
-	for _, want := range []string{"merged branch cleanup", "merged branches will be removed", "feature/ui", "merged"} {
+	for _, want := range []string{"merged branch cleanup", "merged branches will be deleted", "feature/ui", "merged"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("upstream cleanup confirm should contain %q:\n%s", want, view)
 		}

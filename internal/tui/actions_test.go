@@ -24,6 +24,26 @@ func (r *actionRunner) Run(_ context.Context, _ string, args ...string) ([]byte,
 	return r.outputs[strings.Join(args, " ")], nil
 }
 
+func wrapStatusAfter(t *testing.T, status *gitbutler.WorkspaceStatus) []byte {
+	t.Helper()
+	statusRaw, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapped := append([]byte(`{"result":{},"status":`), statusRaw...)
+	return append(wrapped, '}')
+}
+
+func markFixtureBranchMerged(status *gitbutler.WorkspaceStatus) {
+	status.UpstreamState.Behind = 0
+	status.UpstreamState.LatestCommit = status.MergeBase
+	status.UpstreamState.UpstreamCommits = nil
+	state := "MERGED"
+	status.Stacks[0].Branches[0].ReviewState = &state
+	status.Stacks[0].Branches[0].BranchStatus = gitbutler.StatusText("nothingToPush")
+	status.Stacks[0].Branches[0].MergeStatus = gitbutler.StatusText("clean")
+}
+
 func TestDangerousActionsRequireConfirmation(t *testing.T) {
 	model := newModel(gitbutler.NewClient(".", nil))
 	model.data = buildWorkspaceData(loadFixtureStatus(t), loadFixtureBranches(t))
@@ -1027,13 +1047,7 @@ func TestUpdateFromUpstreamRefreshesBeforeSayingNoUpdate(t *testing.T) {
 func TestUpdateFromUpstreamOpensConfirmForMergedBranchCleanup(t *testing.T) {
 	model := newModel(gitbutler.NewClient(".", nil))
 	status := loadFixtureStatus(t)
-	status.UpstreamState.Behind = 0
-	status.UpstreamState.LatestCommit = status.MergeBase
-	status.UpstreamState.UpstreamCommits = nil
-	state := "MERGED"
-	status.Stacks[0].Branches[0].ReviewState = &state
-	status.Stacks[0].Branches[0].BranchStatus = gitbutler.StatusText("nothingToPush")
-	status.Stacks[0].Branches[0].MergeStatus = gitbutler.StatusText("clean")
+	markFixtureBranchMerged(status)
 
 	model.data = buildWorkspaceData(status, loadFixtureBranches(t))
 	nextModel, cmd := model.startAction(action{ID: actionPull, ConfirmText: model.upstreamUpdateConfirmText()})
@@ -1043,6 +1057,67 @@ func TestUpdateFromUpstreamOpensConfirmForMergedBranchCleanup(t *testing.T) {
 	}
 	if next.mode != modeConfirm || next.confirm.Action.ID != actionPull {
 		t.Fatalf("mode/action = %d/%q, want pull confirm", next.mode, next.confirm.Action.ID)
+	}
+}
+
+func TestPullCleansMergedBranchWithoutIncomingTargetCommits(t *testing.T) {
+	status := loadFixtureStatus(t)
+	markFixtureBranchMerged(status)
+	wrapped := wrapStatusAfter(t, status)
+	runner := &actionRunner{outputs: map[string][]byte{
+		"branch delete feature/ui --force -j --status-after": wrapped,
+	}}
+	model := newModel(gitbutler.NewClient(".", runner))
+	model.data = buildWorkspaceData(status, loadFixtureBranches(t))
+
+	_, cmd := model.execute(action{ID: actionPull}, "")
+	if cmd == nil {
+		t.Fatal("expected cleanup command")
+	}
+	msg, ok := cmd().(mutationMsg)
+	if !ok {
+		t.Fatalf("message = %T, want mutationMsg", msg)
+	}
+	if msg.err != nil {
+		t.Fatalf("cleanup failed: %v", msg.err)
+	}
+	want := [][]string{{"branch", "delete", "feature/ui", "--force", "-j", "--status-after"}}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
+func TestPullUpdatesThenCleansMergedBranchWithIncomingTargetCommits(t *testing.T) {
+	status := loadFixtureStatus(t)
+	markFixtureBranchMerged(status)
+	status.UpstreamState.Behind = 1
+	status.UpstreamState.LatestCommit = gitbutler.Commit{CommitID: "remote-tip", Message: "Merge pull request #825"}
+	status.UpstreamState.UpstreamCommits = []gitbutler.Commit{status.UpstreamState.LatestCommit}
+	wrapped := wrapStatusAfter(t, status)
+	runner := &actionRunner{outputs: map[string][]byte{
+		"pull -j --status-after":                             wrapped,
+		"branch delete feature/ui --force -j --status-after": wrapped,
+	}}
+	model := newModel(gitbutler.NewClient(".", runner))
+	model.data = buildWorkspaceData(status, loadFixtureBranches(t))
+
+	_, cmd := model.execute(action{ID: actionPull}, "")
+	if cmd == nil {
+		t.Fatal("expected update command")
+	}
+	msg, ok := cmd().(mutationMsg)
+	if !ok {
+		t.Fatalf("message = %T, want mutationMsg", msg)
+	}
+	if msg.err != nil {
+		t.Fatalf("update failed: %v", msg.err)
+	}
+	want := [][]string{
+		{"pull", "-j", "--status-after"},
+		{"branch", "delete", "feature/ui", "--force", "-j", "--status-after"},
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
 	}
 }
 

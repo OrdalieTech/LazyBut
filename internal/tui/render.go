@@ -2017,7 +2017,7 @@ func (m Model) renderUpstreamConfirm() string {
 	if incoming > 0 {
 		rows = append(rows, "", m.renderIncomingCard(innerW))
 	} else if mergedCleanup > 0 {
-		rows = append(rows, "", styleMerged.Render(glyphMerged+" merged branches will be removed by `but pull`"))
+		rows = append(rows, "", styleMerged.Render(glyphMerged+" merged branches will be deleted after update"))
 	}
 	branchLabel := "branches to rebase"
 	if incoming == 0 && mergedCleanup > 0 {

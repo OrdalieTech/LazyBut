@@ -1646,8 +1646,10 @@ func (m Model) execute(action action, input string) (tea.Model, tea.Cmd) {
 			return formatPullCheckOutput(summary, out), nil
 		})
 	case actionPull:
-		return m.startLoadingFor("pulling", actionPull, ""), m.mutationCmd("updated from upstream", func() (*gitbutler.WorkspaceStatus, error) {
-			return m.client.Pull(ctx)
+		cleanupBranches := m.mergedUpstreamBranchNames()
+		label := upstreamUpdateLoadingLabel(m.incomingChangeCount(), cleanupBranches)
+		return m.startLoadingFor(label, actionPull, ""), m.mutationCmd("updated from upstream", func() (*gitbutler.WorkspaceStatus, error) {
+			return m.updateFromUpstream(ctx, cleanupBranches)
 		})
 	case actionPush:
 		return m.startLoadingFor("pushing", actionPush, branchRef), m.mutationCmd("pushed", func() (*gitbutler.WorkspaceStatus, error) {
@@ -1930,6 +1932,34 @@ func (m Model) mutationCmd(label string, fn func() (*gitbutler.WorkspaceStatus, 
 	}
 }
 
+func (m Model) updateFromUpstream(ctx context.Context, cleanupBranches []string) (*gitbutler.WorkspaceStatus, error) {
+	var status *gitbutler.WorkspaceStatus
+	var err error
+	if m.incomingChangeCount() > 0 || len(cleanupBranches) == 0 {
+		status, err = m.client.Pull(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	for _, branch := range cleanupBranches {
+		branch = strings.TrimSpace(branch)
+		if branch == "" {
+			continue
+		}
+		if status != nil && !workspaceStatusHasBranch(status, branch) {
+			continue
+		}
+		status, err = m.client.DeleteBranch(ctx, branch)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if status != nil {
+		return status, nil
+	}
+	return m.client.Status(ctx)
+}
+
 func (m Model) textCmd(target string, fn func() (string, error)) tea.Cmd {
 	return func() tea.Msg {
 		body, err := fn()
@@ -1989,9 +2019,17 @@ func (m Model) previewSelectionTarget() string {
 }
 
 func (m Model) upstreamUpdateConfirmText() string {
+	confirmAction := "run `but pull`"
+	cleanupCount := len(m.mergedUpstreamBranchNames())
+	switch {
+	case cleanupCount > 0 && m.incomingChangeCount() > 0:
+		confirmAction = "run `but pull`, then delete merged branches"
+	case cleanupCount > 0:
+		confirmAction = "delete merged branches"
+	}
 	return "Fetch the target branch and rebase every applied branch on top of it.\n\n" +
 		m.upstreamUpdateSummary() +
-		"\n\nRun `u` first for a non-mutating conflict check, or confirm now to run `but pull`."
+		"\n\nRun `u` first for a non-mutating conflict check, or confirm now to " + confirmAction + "."
 }
 
 func (m Model) upstreamUpdateSummary() string {
@@ -2051,6 +2089,30 @@ func (m Model) mergedUpstreamBranchNames() []string {
 		names = append(names, lane.Name)
 	}
 	return names
+}
+
+func upstreamUpdateLoadingLabel(incoming int, cleanupBranches []string) string {
+	if len(cleanupBranches) > 0 && incoming > 0 {
+		return "updating + cleaning"
+	}
+	if len(cleanupBranches) > 0 {
+		return "cleaning merged branches"
+	}
+	return "pulling"
+}
+
+func workspaceStatusHasBranch(status *gitbutler.WorkspaceStatus, name string) bool {
+	if status == nil {
+		return false
+	}
+	for _, stack := range status.Stacks {
+		for _, branch := range stack.Branches {
+			if branch.Name == name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func formatPullCheckOutput(summary, out string) string {
