@@ -139,7 +139,7 @@ LazyBut models GitButler desktop's "Update workspace" flow for the terminal:
 - If the target branch has incoming commits or a PR-merged branch can be cleaned, it opens a navigable update modal.
 - `u` remains available for a non-mutating check before running the update.
 - `y` / `enter` runs `but pull`, which fetches the target branch and rebases/restacks applied branches.
-- When the modal lists merged branch cleanups, `y` / `enter` also deletes those local branches with `but branch delete --force`.
+- When the modal lists merged branch cleanups, `y` / `enter` also deletes those local branches with `but branch delete`.
 - Conflicts reported by GitButler are surfaced in the TUI.
 
 ## Architecture

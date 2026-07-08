@@ -26,12 +26,17 @@ func (r *actionRunner) Run(_ context.Context, _ string, args ...string) ([]byte,
 
 func wrapStatusAfter(t *testing.T, status *gitbutler.WorkspaceStatus) []byte {
 	t.Helper()
+	wrapped := append([]byte(`{"result":{},"status":`), rawStatus(t, status)...)
+	return append(wrapped, '}')
+}
+
+func rawStatus(t *testing.T, status *gitbutler.WorkspaceStatus) []byte {
+	t.Helper()
 	statusRaw, err := json.Marshal(status)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrapped := append([]byte(`{"result":{},"status":`), statusRaw...)
-	return append(wrapped, '}')
+	return statusRaw
 }
 
 func markFixtureBranchMerged(status *gitbutler.WorkspaceStatus) {
@@ -542,9 +547,10 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 			id:         actionDelete,
 			laneCursor: 1,
 			outputs: map[string][]byte{
-				"branch delete feature/ui --force -j --status-after": wrapped,
+				"branch delete feature/ui": []byte("deleted"),
+				"status -j":                statusRaw,
 			},
-			want: [][]string{{"branch", "delete", "feature/ui", "--force", "-j", "--status-after"}},
+			want: [][]string{{"branch", "delete", "feature/ui"}, {"status", "-j"}},
 		},
 		{
 			name:          "discard change",
@@ -1063,9 +1069,9 @@ func TestUpdateFromUpstreamOpensConfirmForMergedBranchCleanup(t *testing.T) {
 func TestPullCleansMergedBranchWithoutIncomingTargetCommits(t *testing.T) {
 	status := loadFixtureStatus(t)
 	markFixtureBranchMerged(status)
-	wrapped := wrapStatusAfter(t, status)
 	runner := &actionRunner{outputs: map[string][]byte{
-		"branch delete feature/ui --force -j --status-after": wrapped,
+		"branch delete feature/ui": []byte("deleted"),
+		"status -j":                rawStatus(t, status),
 	}}
 	model := newModel(gitbutler.NewClient(".", runner))
 	model.data = buildWorkspaceData(status, loadFixtureBranches(t))
@@ -1081,7 +1087,7 @@ func TestPullCleansMergedBranchWithoutIncomingTargetCommits(t *testing.T) {
 	if msg.err != nil {
 		t.Fatalf("cleanup failed: %v", msg.err)
 	}
-	want := [][]string{{"branch", "delete", "feature/ui", "--force", "-j", "--status-after"}}
+	want := [][]string{{"branch", "delete", "feature/ui"}, {"status", "-j"}}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
 	}
@@ -1095,8 +1101,9 @@ func TestPullUpdatesThenCleansMergedBranchWithIncomingTargetCommits(t *testing.T
 	status.UpstreamState.UpstreamCommits = []gitbutler.Commit{status.UpstreamState.LatestCommit}
 	wrapped := wrapStatusAfter(t, status)
 	runner := &actionRunner{outputs: map[string][]byte{
-		"pull -j --status-after":                             wrapped,
-		"branch delete feature/ui --force -j --status-after": wrapped,
+		"pull -j --status-after":   wrapped,
+		"branch delete feature/ui": []byte("deleted"),
+		"status -j":                rawStatus(t, status),
 	}}
 	model := newModel(gitbutler.NewClient(".", runner))
 	model.data = buildWorkspaceData(status, loadFixtureBranches(t))
@@ -1114,7 +1121,8 @@ func TestPullUpdatesThenCleansMergedBranchWithIncomingTargetCommits(t *testing.T
 	}
 	want := [][]string{
 		{"pull", "-j", "--status-after"},
-		{"branch", "delete", "feature/ui", "--force", "-j", "--status-after"},
+		{"branch", "delete", "feature/ui"},
+		{"status", "-j"},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)

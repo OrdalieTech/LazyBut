@@ -375,13 +375,10 @@ func (c *Client) NewBranch(ctx context.Context, name string, anchor string) (*Wo
 }
 
 func (c *Client) DeleteBranch(ctx context.Context, branch string) (*WorkspaceStatus, error) {
-	// `but branch delete` prompts for confirmation when the branch has unpushed
-	// commits. LazyBut runs non-interactively (stdin is /dev/null), where `but`
-	// refuses to prompt and the command fails — and the user has *already*
-	// confirmed via LazyBut's own Dangerous dialog. --force skips only that
-	// prompt; it does not bypass GitButler's structural safety checks (e.g. it
-	// still refuses to leave an anonymous segment).
-	return c.mutate(ctx, "branch", "delete", branch, "--force")
+	if _, err := c.runText(ctx, "branch", "delete", branch); err != nil {
+		return nil, err
+	}
+	return c.Status(ctx)
 }
 
 func (c *Client) Reword(ctx context.Context, target, message string) (*WorkspaceStatus, error) {

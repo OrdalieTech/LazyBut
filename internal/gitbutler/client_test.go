@@ -265,10 +265,6 @@ func TestClientMutationCommandSurface(t *testing.T) {
 			_, err := c.NewBranch(ctx, "child", "feature/ui")
 			return err
 		}},
-		{"delete branch", "branch delete feature/ui --force -j --status-after", func(ctx context.Context, c *Client) error {
-			_, err := c.DeleteBranch(ctx, "feature/ui")
-			return err
-		}},
 		{"reword", "reword feature/ui -m renamed -j --status-after", func(ctx context.Context, c *Client) error {
 			_, err := c.Reword(ctx, "feature/ui", "renamed")
 			return err
@@ -397,6 +393,29 @@ func TestClientTextCommandSurface(t *testing.T) {
 				t.Fatalf("call = %q, want %q", got, tc.key)
 			}
 		})
+	}
+}
+
+func TestClientDeleteBranchUsesPlainCommandThenStatus(t *testing.T) {
+	statusRaw, err := os.ReadFile("testdata/status.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"branch delete feature/ui": []byte("deleted"),
+		"status -j":                statusRaw,
+	}}
+	client := NewClient(".", runner)
+
+	if _, err := client.DeleteBranch(context.Background(), "feature/ui"); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"branch", "delete", "feature/ui"},
+		{"status", "-j"},
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
 	}
 }
 
