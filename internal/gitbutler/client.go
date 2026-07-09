@@ -137,7 +137,7 @@ func (c *Client) BranchList(ctx context.Context) (*BranchList, error) {
 }
 
 func (c *Client) enrichStatusWithGitHubPRs(ctx context.Context, status *WorkspaceStatus) {
-	if status == nil || !statusNeedsGitHubPRs(status) {
+	if status == nil || !statusHasGitHubPRCandidates(status) {
 		return
 	}
 	prs := c.githubPullRequests(ctx)
@@ -151,34 +151,22 @@ func (c *Client) enrichStatusWithGitHubPRs(ctx context.Context, status *Workspac
 			if !ok {
 				continue
 			}
-			if branch.ReviewID == nil || *branch.ReviewID == "" {
-				id := fmt.Sprint(pr.Number)
-				branch.ReviewID = &id
-			}
-			if branch.ReviewURL == nil || *branch.ReviewURL == "" {
-				url := pr.URL
-				branch.ReviewURL = &url
-			}
-			if branch.ReviewState == nil || *branch.ReviewState == "" {
-				state := pr.State
-				branch.ReviewState = &state
-			}
-			if branch.ReviewMergedAt == nil || *branch.ReviewMergedAt == "" {
-				mergedAt := pr.MergedAt
-				branch.ReviewMergedAt = &mergedAt
-			}
+			id := fmt.Sprint(pr.Number)
+			url := pr.URL
+			state := pr.State
+			mergedAt := pr.MergedAt
+			branch.ReviewID = &id
+			branch.ReviewURL = &url
+			branch.ReviewState = &state
+			branch.ReviewMergedAt = &mergedAt
 		}
 	}
 }
 
-func statusNeedsGitHubPRs(status *WorkspaceStatus) bool {
+func statusHasGitHubPRCandidates(status *WorkspaceStatus) bool {
 	for _, stack := range status.Stacks {
 		for _, branch := range stack.Branches {
-			if branch.Name == "" {
-				continue
-			}
-			if branch.ReviewID == nil || *branch.ReviewID == "" || branch.ReviewURL == nil || *branch.ReviewURL == "" ||
-				branch.ReviewState == nil || *branch.ReviewState == "" {
+			if branch.Name != "" {
 				return true
 			}
 		}
@@ -187,7 +175,7 @@ func statusNeedsGitHubPRs(status *WorkspaceStatus) bool {
 }
 
 func (c *Client) enrichBranchListWithGitHubPRs(ctx context.Context, branches *BranchList) {
-	if branches == nil || !branchListNeedsGitHubPRs(branches) {
+	if branches == nil || !branchListHasGitHubPRCandidates(branches) {
 		return
 	}
 	prs := c.githubPullRequests(ctx)
@@ -197,9 +185,6 @@ func (c *Client) enrichBranchListWithGitHubPRs(ctx context.Context, branches *Br
 	for stackIdx := range branches.AppliedStacks {
 		for headIdx := range branches.AppliedStacks[stackIdx].Heads {
 			head := &branches.AppliedStacks[stackIdx].Heads[headIdx]
-			if len(head.Reviews) > 0 {
-				continue
-			}
 			if pr, ok := prs[head.Name]; ok {
 				head.Reviews = []Review{pr}
 			}
@@ -207,36 +192,23 @@ func (c *Client) enrichBranchListWithGitHubPRs(ctx context.Context, branches *Br
 	}
 	for branchIdx := range branches.Branches {
 		branch := &branches.Branches[branchIdx]
-		if len(branch.Reviews) > 0 {
-			continue
-		}
 		if pr, ok := prs[branch.Name]; ok {
 			branch.Reviews = []Review{pr}
 		}
 	}
 }
 
-func branchListNeedsGitHubPRs(branches *BranchList) bool {
+func branchListHasGitHubPRCandidates(branches *BranchList) bool {
 	for _, stack := range branches.AppliedStacks {
 		for _, head := range stack.Heads {
-			if head.Name != "" && len(head.Reviews) == 0 {
+			if head.Name != "" {
 				return true
-			}
-			for _, review := range head.Reviews {
-				if review.State == "" {
-					return true
-				}
 			}
 		}
 	}
 	for _, branch := range branches.Branches {
-		if branch.Name != "" && len(branch.Reviews) == 0 {
+		if branch.Name != "" {
 			return true
-		}
-		for _, review := range branch.Reviews {
-			if review.State == "" {
-				return true
-			}
 		}
 	}
 	return false
