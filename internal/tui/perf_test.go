@@ -38,8 +38,7 @@ func BenchmarkPreviewLinesHugeDiff(b *testing.B) {
 	for i := range lines {
 		lines[i] = "  42   43│+added line of code in a reasonably long file"
 	}
-	m.preview = strings.Join(lines, "\n")
-	m.previewTarget = "x1"
+	m.setPreview("x1", strings.Join(lines, "\n"), nil)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		m.previewLines(120, 10)

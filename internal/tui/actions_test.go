@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -358,7 +359,7 @@ func TestMouseWheelAndClickNavigation(t *testing.T) {
 		t.Fatalf("wheel right lane = %d, want 0", next.laneCursor)
 	}
 
-	nextModel, _ = next.handleMouse(tea.MouseMsg{X: 35, Y: 5, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	nextModel, _ = next.handleMouse(tea.MouseMsg{X: 35, Y: 4, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
 	next = nextModel.(Model)
 	if next.laneCursor != 1 || next.contentCursor != 0 {
 		t.Fatalf("click lane/content = %d/%d, want 1/0", next.laneCursor, next.contentCursor)
@@ -368,6 +369,69 @@ func TestMouseWheelAndClickNavigation(t *testing.T) {
 	next = nextModel.(Model)
 	if next.laneCursor != 1 || next.contentCursor != 1 {
 		t.Fatalf("wheel down lane/content = %d/%d, want 1/1", next.laneCursor, next.contentCursor)
+	}
+}
+
+func TestKanbanHeaderCueDoesNotOffsetMouseHitRows(t *testing.T) {
+	model := modelWithActiveBranches(t, 7, 70, 30)
+	model.data.Status.UnassignedChanges = append(model.data.Status.UnassignedChanges, gitbutler.FileChange{
+		CLIID:    "uv",
+		FilePath: "internal/tui/second.go",
+	})
+	model.data.Lanes[0].ChangeCount++
+	model.laneCursor = 1
+	model.contentCursor = 0
+	model.focus = panelLanes
+	for _, tc := range []struct {
+		y    int
+		want int
+	}{
+		{y: 4, want: 0},
+		{y: 5, want: 1},
+	} {
+		clicked, _ := model.clickKanban(1, tc.y)
+		got := clicked.(Model)
+		if got.laneCursor != 0 || got.contentCursor != tc.want || got.focus != panelContents {
+			t.Fatalf("row %d click = lane/content/focus %d/%d/%d, want 0/%d/%d", tc.y, got.laneCursor, got.contentCursor, got.focus, tc.want, panelContents)
+		}
+	}
+}
+
+func TestKanbanClicksRespectLeftAnchoredCappedBoard(t *testing.T) {
+	for _, width := range []int{100, 200} {
+		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
+			model := newModel(gitbutler.NewClient(".", nil))
+			model.loading = false
+			model.width = width
+			model.height = 32
+			model.data.Lanes = []lane{
+				{Key: "zz", ID: "zz", Name: "unassigned", Kind: laneUnassigned},
+				{Key: "b1", ID: "b1", Name: "feature/ui", Kind: laneAppliedBranch},
+			}
+			count, columnWidth := model.kanbanGeometry(width)
+			boardEnd := count * columnWidth
+
+			model.laneCursor = 1
+			model.focus = panelLanes
+			clicked, _ := model.clickKanban(0, 5)
+			insideFirst := clicked.(Model)
+			if insideFirst.laneCursor != 0 || insideFirst.focus != panelContents {
+				t.Fatalf("left edge click = lane %d focus %d, want zz contents", insideFirst.laneCursor, insideFirst.focus)
+			}
+
+			clicked, _ = model.clickKanban(boardEnd, 5)
+			outsideRight := clicked.(Model)
+			if outsideRight.laneCursor != 1 || outsideRight.focus != panelLanes {
+				t.Fatalf("right gutter click changed selection/focus: lane=%d focus=%d", outsideRight.laneCursor, outsideRight.focus)
+			}
+
+			model.laneCursor = 0
+			clicked, _ = model.clickKanban(columnWidth, 5)
+			inside := clicked.(Model)
+			if inside.laneCursor != 1 || inside.focus != panelContents {
+				t.Fatalf("second lane click = lane %d focus %d, want lane 1 contents", inside.laneCursor, inside.focus)
+			}
+		})
 	}
 }
 

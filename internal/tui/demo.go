@@ -54,9 +54,7 @@ func renderDemoSnapshot(width, height int, overlay string) string {
 	model.laneCursor = 0
 	model.contentCursor = 0
 	model, _ = model.withPreview()
-	model.preview = demoPreviewDiff
-	model.previewErr = nil
-	model.previewTarget = "demo"
+	model.setPreview("demo", demoPreviewDiff, nil)
 
 	switch overlay {
 	case "palette":

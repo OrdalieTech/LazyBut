@@ -59,7 +59,7 @@ func TestClientStatusUsesJSON(t *testing.T) {
 	}
 }
 
-func TestClientStatusEnrichesMissingGitHubPR(t *testing.T) {
+func TestClientStatusReconcilesStaleGitHubPRAndCachesResult(t *testing.T) {
 	statusRaw := []byte(`{
 		"unassignedChanges": [],
 		"stacks": [{
@@ -71,7 +71,10 @@ func TestClientStatusEnrichesMissingGitHubPR(t *testing.T) {
 				"commits": [],
 				"upstreamCommits": [],
 				"branchStatus": "nothingToPush",
-				"reviewId": null,
+				"reviewId": "700",
+				"reviewUrl": "https://github.com/OrdalieTech/Ordalie-back/pull/700",
+				"reviewState": "OPEN",
+				"reviewMergedAt": null,
 				"mergeStatus": "clean"
 			}]
 		}],
@@ -111,14 +114,14 @@ func TestClientStatusEnrichesMissingGitHubPR(t *testing.T) {
 	}
 }
 
-func TestClientBranchListEnrichesMissingGitHubPR(t *testing.T) {
+func TestClientBranchListReconcilesStaleGitHubPR(t *testing.T) {
 	branchRaw := []byte(`{
-		"appliedStacks": [{"id":"s1","heads":[{"name":"glose-os-poc","reviews":[]}]}],
+		"appliedStacks": [{"id":"s1","heads":[{"name":"glose-os-poc","reviews":[{"number":700,"url":"https://github.com/OrdalieTech/Ordalie-back/pull/700","state":"OPEN"}]}]}],
 		"branches": []
 	}`)
 	butRunner := &fakeRunner{outputs: map[string][]byte{"branch list -j --all": branchRaw}}
 	ghRunner := &fakeRunner{outputs: map[string][]byte{
-		"pr list --state all --json number,url,headRefName,state,mergedAt --limit 1000": []byte(`[{"number":781,"url":"https://github.com/OrdalieTech/Ordalie-back/pull/781","headRefName":"glose-os-poc","state":"OPEN"}]`),
+		"pr list --state all --json number,url,headRefName,state,mergedAt --limit 1000": []byte(`[{"number":781,"url":"https://github.com/OrdalieTech/Ordalie-back/pull/781","headRefName":"glose-os-poc","state":"MERGED","mergedAt":"2026-07-08T13:08:08Z"}]`),
 	}}
 	client := NewClient(".", butRunner)
 	client.GHRunner = ghRunner
@@ -128,7 +131,7 @@ func TestClientBranchListEnrichesMissingGitHubPR(t *testing.T) {
 		t.Fatal(err)
 	}
 	reviews := branches.AppliedStacks[0].Heads[0].Reviews
-	if len(reviews) != 1 || reviews[0].Number != 781 || reviews[0].URL == "" || reviews[0].State != "OPEN" {
+	if len(reviews) != 1 || reviews[0].Number != 781 || reviews[0].URL != "https://github.com/OrdalieTech/Ordalie-back/pull/781" || reviews[0].State != "MERGED" || reviews[0].MergedAt == "" {
 		t.Fatalf("reviews = %#v", reviews)
 	}
 }
