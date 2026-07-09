@@ -2,6 +2,8 @@ package tui
 
 import (
 	"errors"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -26,6 +28,25 @@ func ansiPrefix(style lipgloss.Style) string {
 		return rendered[:i+1]
 	}
 	return rendered
+}
+
+func modelWithActiveBranches(t *testing.T, active, width, height int) Model {
+	t.Helper()
+	model := newModel(gitbutler.NewClient(".", nil))
+	model.data = buildWorkspaceData(loadFixtureStatus(t), loadFixtureBranches(t))
+	model.loading = false
+	model.width = width
+	model.height = height
+	for i := len(model.data.Lanes) - 1; i < active; i++ {
+		id := fmt.Sprintf("b%d", i+1)
+		model.data.Lanes = append(model.data.Lanes, lane{
+			Key:  id,
+			ID:   id,
+			Name: fmt.Sprintf("feature/lane-%d", i+1),
+			Kind: laneAppliedBranch,
+		})
+	}
+	return model
 }
 
 func TestResponsiveRenderModes(t *testing.T) {
@@ -91,6 +112,140 @@ func TestWideRenderUsesKanbanColumns(t *testing.T) {
 	}
 	if strings.Contains(view, "feature/unapplied") {
 		t.Fatalf("inactive branches should stay out of the workspace kanban\n%s", view)
+	}
+}
+
+func TestKanbanGeometryCapsAndLeftAnchorsSparseBoards(t *testing.T) {
+	tests := []struct {
+		name       string
+		width      int
+		laneCount  int
+		wantCount  int
+		wantWidth  int
+		wantBoardW int
+	}{
+		{name: "very wide single lane", width: 200, laneCount: 1, wantCount: 1, wantWidth: 48, wantBoardW: 48},
+		{name: "very wide two lanes", width: 200, laneCount: 2, wantCount: 2, wantWidth: 48, wantBoardW: 96},
+		{name: "normal two lanes", width: 100, laneCount: 2, wantCount: 2, wantWidth: 48, wantBoardW: 96},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := newModel(gitbutler.NewClient(".", nil))
+			model.loading = false
+			model.data.Lanes = []lane{{Key: "zz", ID: "zz", Name: "unassigned", Kind: laneUnassigned}}
+			if tt.laneCount == 2 {
+				model.data.Lanes = append(model.data.Lanes, lane{Key: "b1", ID: "b1", Name: "feature/ui", Kind: laneAppliedBranch})
+			}
+
+			count, columnWidth := model.kanbanGeometry(tt.width)
+			if count != tt.wantCount || columnWidth != tt.wantWidth {
+				t.Fatalf("geometry = %d x %d, want %d x %d", count, columnWidth, tt.wantCount, tt.wantWidth)
+			}
+			if count*columnWidth != tt.wantBoardW {
+				t.Fatalf("board width = %d, want %d", count*columnWidth, tt.wantBoardW)
+			}
+
+			view := model.renderKanban(tt.width, 12)
+			top := strings.Split(view, "\n")[0]
+			board, right := ansiSplit(top, tt.wantBoardW)
+			if strings.Contains(right, "╭") || strings.Contains(right, "╮") {
+				t.Fatalf("board borders escaped left-anchored region: %q", top)
+			}
+			if got := strings.Count(board, "╭"); got != tt.laneCount {
+				t.Fatalf("left-anchored board has %d lane starts, want %d: %q", got, tt.laneCount, top)
+			}
+			if got := lipgloss.Width(top); got != tt.width {
+				t.Fatalf("rendered row width = %d, want %d", got, tt.width)
+			}
+		})
+	}
+}
+
+func TestKanbanHeaderCueAnnouncesAndTracksHiddenActiveBranches(t *testing.T) {
+	const activeBranches = 7
+	tests := []struct {
+		width         int
+		visibleActive int
+	}{
+		{width: 70, visibleActive: 1},
+		{width: 80, visibleActive: 1},
+		{width: 100, visibleActive: 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("width_%d", tt.width), func(t *testing.T) {
+			model := modelWithActiveBranches(t, activeBranches, tt.width, 30)
+			view := model.renderKanban(tt.width, 12)
+			lines := strings.Split(view, "\n")
+			header := lines[1]
+
+			wantInitial := fmt.Sprintf("1-%d/%d", tt.visibleActive, activeBranches)
+			if !strings.Contains(header, "zz") || !strings.Contains(header, wantInitial) {
+				t.Fatalf("initial header does not announce hidden lanes: %q", header)
+			}
+			if strings.Contains(header, "‹") || !strings.Contains(header, "›") {
+				t.Fatalf("initial affordances = %q, want right only", header)
+			}
+			if got := lipgloss.Height(view); got != 12 {
+				t.Fatalf("kanban height = %d, want 12", got)
+			}
+			for row, line := range lines {
+				if got := lipgloss.Width(line); got != tt.width {
+					t.Fatalf("row %d width = %d, want %d", row, got, tt.width)
+				}
+			}
+
+			for i := 0; i < tt.visibleActive+1; i++ {
+				next, _ := model.moveLane(1)
+				model = next.(Model)
+			}
+			moved := strings.Split(model.renderKanban(tt.width, 12), "\n")[1]
+			start := model.kanbanRestStart(activeBranches, tt.visibleActive)
+			wantMoved := fmt.Sprintf("%d-%d/%d", start+1, start+tt.visibleActive, activeBranches)
+			if !strings.Contains(moved, wantMoved) {
+				t.Fatalf("moved overview = %q, want range %q", moved, wantMoved)
+			}
+			if !strings.Contains(moved, "‹") || !strings.Contains(moved, "›") {
+				t.Fatalf("moved affordances = %q, want left and right", moved)
+			}
+
+			for model.laneCursor < activeBranches {
+				next, _ := model.moveLane(1)
+				model = next.(Model)
+			}
+			atEnd := strings.Split(model.renderKanban(tt.width, 12), "\n")[1]
+			wantEnd := fmt.Sprintf("%d-%d/%d", activeBranches-tt.visibleActive+1, activeBranches, activeBranches)
+			if !strings.Contains(atEnd, wantEnd) || !strings.Contains(atEnd, "‹") || strings.Contains(atEnd, "›") {
+				t.Fatalf("end overview = %q, want %q with left affordance only", atEnd, wantEnd)
+			}
+		})
+	}
+}
+
+func TestManyLaneHeaderCueStaysWithinRequestedSnapshotGeometry(t *testing.T) {
+	for _, size := range []struct {
+		width  int
+		height int
+	}{
+		{width: 100, height: 30},
+		{width: 80, height: 28},
+	} {
+		t.Run(fmt.Sprintf("%dx%d", size.width, size.height), func(t *testing.T) {
+			model := modelWithActiveBranches(t, 7, size.width, size.height)
+			view := model.View()
+			if !strings.Contains(view, "/7") {
+				t.Fatalf("snapshot-sized view omitted the branch cue:\n%s", view)
+			}
+			assertGeometry(t, view, size.width, size.height)
+		})
+	}
+}
+
+func TestManyLaneHeaderCueStaysOutOfNarrowTabbedLayout(t *testing.T) {
+	model := modelWithActiveBranches(t, 7, kanbanMinWidth-1, 28)
+	view := model.renderMain(model.width, 20)
+	if strings.Contains(view, "/7") {
+		t.Fatalf("narrow tabbed layout rendered the kanban branch cue:\n%s", view)
 	}
 }
 
@@ -445,7 +600,7 @@ func TestKanbanColumnKeepsFooterWithMultilineCommitMessage(t *testing.T) {
 	model.loading = false
 	model.data = buildWorkspaceData(status, nil)
 
-	column := model.renderKanbanColumn(model.data.Lanes[1], 1, 60, 14)
+	column := model.renderKanbanColumn(model.data.Lanes[1], 1, 60, 14, "")
 	if !strings.Contains(column, "PR #781") {
 		t.Fatalf("footer PR should stay pinned below multiline commit message:\n%s", column)
 	}
@@ -679,6 +834,49 @@ func TestBoxDecorationStripping(t *testing.T) {
 	}
 	if isBoxDecoration("x9 apps/api/main.go│") {
 		t.Fatalf("file header line should NOT be detected as decoration")
+	}
+}
+
+func TestPreviewSetterCachesNormalizedRowsAndClearsThem(t *testing.T) {
+	model := newModel(nil)
+	body := "─────────────╮\nx9 apps/api/main.go│\n   1 1│ keep\n      2│+add\n─────────────╯"
+	model.setPreview("x9", body, nil)
+
+	if !model.previewRowsReady || !model.previewRowsDiff {
+		t.Fatalf("preview cache not initialized: ready=%v diff=%v", model.previewRowsReady, model.previewRowsDiff)
+	}
+	if got, want := model.previewRows, []string{"   1 1│ keep", "      2│+add"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("cached rows = %#v, want %#v", got, want)
+	}
+
+	model.setPreview("", "", nil)
+	if model.previewRowsReady || model.previewRows != nil {
+		t.Fatalf("preview cache survived clear: ready=%v rows=%#v", model.previewRowsReady, model.previewRows)
+	}
+}
+
+func TestPreviewRowsLazyFallbackSupportsDirectFixtureAssignment(t *testing.T) {
+	model := newModel(nil)
+	model.preview = "first\nsecond"
+	model.previewTarget = "fixture"
+
+	rows, isDiff := model.previewBodyRawRows()
+	if !isDiff || !reflect.DeepEqual(rows, []string{"first", "second"}) {
+		t.Fatalf("lazy rows = %#v/%v", rows, isDiff)
+	}
+	if model.previewRowsReady {
+		t.Fatal("value-receiver lazy fallback should not mutate the fixture model")
+	}
+}
+
+func TestPreviewLinesWindowsAcrossHeaderAndCachedBody(t *testing.T) {
+	model := newModel(nil)
+	model.setPreview("x1", "one\ntwo\nthree\nfour", nil)
+	model.previewScroll = 2
+
+	lines := model.previewLines(80, 2)
+	if len(lines) != 2 || !strings.Contains(lines[0], "two") || !strings.Contains(lines[1], "three") {
+		t.Fatalf("windowed lines = %#v, want body rows two/three", lines)
 	}
 }
 

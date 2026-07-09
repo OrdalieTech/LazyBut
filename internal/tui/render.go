@@ -426,7 +426,7 @@ func (m Model) renderKanban(width, height int) string {
 		return box("kanban workspace", hint, width, height, true)
 	}
 
-	columnCount, _ := m.kanbanGeometry(width)
+	columnCount, columnWidth := m.kanbanGeometry(width)
 
 	// Collect the lanes that will actually be drawn (zz is pinned leftmost and
 	// always visible; the rest are windowed around the cursor).
@@ -435,10 +435,11 @@ func (m Model) renderKanban(width, height int) string {
 		index int
 	}
 	slots := []slot{{lanes[0], 0}}
+	restStart := 0
 	if columnCount > 1 && len(lanes) > 1 {
 		rest := lanes[1:]
 		visible := columnCount - 1
-		restStart := m.kanbanRestStart(len(rest), visible)
+		restStart = m.kanbanRestStart(len(rest), visible)
 		end := restStart + visible
 		if end > len(rest) {
 			end = len(rest)
@@ -448,22 +449,29 @@ func (m Model) renderKanban(width, height int) string {
 		}
 	}
 
-	// Spread the width evenly across the visible columns, handing the
-	// integer-division remainder to the leftmost columns one cell at a time.
-	// Columns end up within a single cell of each other and the board fills the
-	// width exactly, lining up flush with the preview below.
 	n := len(slots)
-	base := width / n
-	rem := width % n
 	columns := make([]string, n)
 	for i, s := range slots {
-		w := base
-		if i < rem {
-			w++
+		windowCue := ""
+		if s.index == 0 && len(lanes) > columnCount {
+			windowCue = renderKanbanWindowCue(restStart, min(len(lanes)-1, restStart+columnCount-1), len(lanes)-1)
 		}
-		columns[i] = m.renderKanbanColumn(s.lane, s.index, w, height)
+		columns[i] = m.renderKanbanColumn(s.lane, s.index, columnWidth, height, windowCue)
 	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, columns...)
+	board := lipgloss.JoinHorizontal(lipgloss.Top, columns...)
+	return lipgloss.PlaceHorizontal(width, lipgloss.Left, board)
+}
+
+func renderKanbanWindowCue(start, end, total int) string {
+	parts := []string{}
+	if start > 0 {
+		parts = append(parts, styleHotKey.Render("‹"))
+	}
+	parts = append(parts, styleAccent.Render(fmt.Sprintf("%d-%d/%d", start+1, end, total)))
+	if end < total {
+		parts = append(parts, styleHotKey.Render("›"))
+	}
+	return strings.Join(parts, " ")
 }
 
 // kanbanRestStart computes the window offset for the active branches (lanes[1:])
@@ -521,7 +529,7 @@ func laneBoxStyle(lane lane, focused bool) lipgloss.Style {
 	return styleBlur
 }
 
-func (m Model) renderKanbanColumn(lane lane, index, width, height int) string {
+func (m Model) renderKanbanColumn(lane lane, index, width, height int, windowCue string) string {
 	innerW := contentWidth(width)
 	rows := []string{
 		laneMetaLine(lane, innerW),
@@ -560,7 +568,7 @@ func (m Model) renderKanbanColumn(lane lane, index, width, height int) string {
 	if footer != "" {
 		bodyLines = append(bodyLines, styleFaint.Render(strings.Repeat("─", innerW)), footer)
 	}
-	title := m.laneKanbanTitle(lane, index)
+	title := m.laneKanbanTitle(lane, index, windowCue)
 	focused := index == m.laneCursor
 	return boxWithStyle(title, strings.Join(bodyLines, "\n"), width, height, laneBoxStyle(lane, focused))
 }
@@ -1502,24 +1510,30 @@ func (m Model) previewRowCount(width int) int {
 func (m Model) previewLines(width, height int) []string {
 	header := m.previewHeaderRows(width)
 	body, isDiff := m.previewBodyRawRows()
-	rows := append([]string{}, header...)
-	bodyStart := len(rows)
-	if len(rows) > 0 && len(body) > 0 {
-		rows = append(rows, "")
+	hasSeparator := len(header) > 0 && len(body) > 0
+	bodyStart := len(header)
+	if hasSeparator {
 		bodyStart++
 	}
-	rows = append(rows, body...)
-	if len(rows) == 0 {
+	total := bodyStart + len(body)
+	if total == 0 {
 		return []string{styleDim.Render("select an item to preview")}
 	}
-	start := windowStart(len(rows), m.previewScroll, height)
-	end := min(len(rows), start+max(1, height))
+	start := windowStart(total, m.previewScroll, height)
+	end := min(total, start+max(1, height))
 	out := make([]string, 0, end-start)
 	for i := start; i < end; i++ {
-		if isDiff && i >= bodyStart {
-			out = append(out, styleDiffLine(fit(rows[i], width)))
-		} else {
-			out = append(out, rows[i])
+		switch {
+		case i < len(header):
+			out = append(out, header[i])
+		case hasSeparator && i == len(header):
+			out = append(out, "")
+		default:
+			row := body[i-bodyStart]
+			if isDiff {
+				row = styleDiffLine(fit(row, width))
+			}
+			out = append(out, row)
 		}
 	}
 	return out
@@ -1555,8 +1569,15 @@ func (m Model) previewBodyRawRows() ([]string, bool) {
 		}
 		return nil, false
 	}
-	rows := splitLines(m.preview)
-	out := make([]string, 0, len(rows))
+	if m.previewRowsReady {
+		return m.previewRows, m.previewRowsDiff
+	}
+	return normalizePreviewRows(m.preview)
+}
+
+func normalizePreviewRows(body string) ([]string, bool) {
+	rows := splitLines(body)
+	out := rows[:0]
 	for _, row := range rows {
 		if isBoxDecoration(row) || isPreviewDuplicateFileHeader(row) {
 			continue
@@ -2524,7 +2545,7 @@ func (m Model) renderHelp() string {
 	return styleOverlay.Width(width).Render(header + "\n\n" + body)
 }
 
-func (m Model) laneKanbanTitle(lane lane, index int) string {
+func (m Model) laneKanbanTitle(lane lane, index int, windowCue string) string {
 	prefix := ""
 	if index == m.laneCursor {
 		prefix = styleAccent.Render("▸ ")
@@ -2534,6 +2555,9 @@ func (m Model) laneKanbanTitle(lane lane, index int) string {
 	var lead string
 	if lane.Kind == laneUnassigned {
 		lead = styleBadgeZZ.Render(laneBadgeText(lane))
+		if windowCue != "" {
+			lead += " " + windowCue
+		}
 	}
 	parts := prefix
 	if lead != "" {

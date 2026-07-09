@@ -74,9 +74,7 @@ func SnapshotMode(client *gitbutler.Client, width, height int, overlay string) s
 		} else {
 			body, perr = client.Diff(pctx, target)
 		}
-		model.preview = body
-		model.previewErr = perr
-		model.previewTarget = target
+		model.setPreview(target, body, perr)
 	}
 	switch overlay {
 	case "help":

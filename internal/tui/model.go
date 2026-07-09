@@ -118,29 +118,32 @@ type Model struct {
 	width  int
 	height int
 
-	data            workspaceData
-	loading         bool
-	loadingLabel    string // e.g. "pushing", "pulling", shown in the activity indicator
-	loadingAction   actionID
-	loadingBranch   string
-	err             error
-	toast           string
-	toastKind       toastKind
-	toastExpires    time.Time
-	focus           panel
-	mode            mode
-	laneCursor      int
-	contentCursor   int
-	previewScroll   int
-	filter          string
-	previewTarget   string
-	preview         string
-	previewErr      error
-	previewExpanded bool // = toggles: preview takes ~60% of the body instead of a strip
-	selected        map[string]bool
-	rangeAnchor     int
-	spinnerFrame    int
-	ticking         bool
+	data             workspaceData
+	loading          bool
+	loadingLabel     string // e.g. "pushing", "pulling", shown in the activity indicator
+	loadingAction    actionID
+	loadingBranch    string
+	err              error
+	toast            string
+	toastKind        toastKind
+	toastExpires     time.Time
+	focus            panel
+	mode             mode
+	laneCursor       int
+	contentCursor    int
+	previewScroll    int
+	filter           string
+	previewTarget    string
+	preview          string
+	previewErr       error
+	previewRows      []string
+	previewRowsReady bool
+	previewRowsDiff  bool
+	previewExpanded  bool // = toggles: preview takes ~60% of the body instead of a strip
+	selected         map[string]bool
+	rangeAnchor      int
+	spinnerFrame     int
+	ticking          bool
 
 	autoRefreshInFlight        bool
 	autoRefreshPending         bool
@@ -562,9 +565,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m = m.reportActionError(msg.err)
 				return m, nil
 			}
-			m.previewErr = nil
-			m.preview = msg.body
-			m.previewTarget = "message"
+			m.setPreview("message", msg.body, nil)
 			// PR creation output lands in the preview, which is easy to miss —
 			// confirm it with a toast so the keypress has a clear result.
 			if loadingAction == actionNewPR || loadingAction == actionNewDraftPR {
@@ -573,10 +574,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.target == m.previewTarget {
-			m.previewErr = msg.err
-			if msg.err == nil {
-				m.preview = msg.body
-			}
+			m.setPreview(msg.target, msg.body, msg.err)
 		}
 		return m, nil
 	case oplogLoadedMsg:
@@ -723,7 +721,12 @@ func (m Model) clickKanban(x, y int) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	count, width := m.kanbanGeometry(m.width)
-	colIdx := max(0, x) / max(1, width)
+	boardOffset := 0
+	boardWidth := count * width
+	if x < boardOffset || x >= boardOffset+boardWidth {
+		return m, nil
+	}
+	colIdx := (x - boardOffset) / max(1, width)
 	var idx int
 	if colIdx == 0 {
 		idx = 0 // pinned zz
@@ -739,8 +742,7 @@ func (m Model) clickKanban(x, y int) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.laneCursor = idx
-	// rows inside the column: 1 (border) + 1 (title) + 1 (meta) + 1 (empty) = 4 above first item
-	m.contentCursor = max(0, y-5)
+	m.contentCursor = max(0, y-4)
 	m.focus = panelContents
 	m.clampCursors()
 	return m.withPreview()
@@ -1970,20 +1972,29 @@ func (m Model) textCmd(target string, fn func() (string, error)) tea.Cmd {
 func (m Model) withPreview() (Model, tea.Cmd) {
 	target := m.previewSelectionTarget()
 	if target == "" {
-		m.previewTarget = ""
-		m.preview = ""
-		m.previewErr = nil
+		m.setPreview("", "", nil)
 		m.previewScroll = 0
 		return m, nil
 	}
 	if target == m.previewTarget {
 		return m, nil
 	}
-	m.previewTarget = target
-	m.preview = ""
-	m.previewErr = nil
+	m.setPreview(target, "", nil)
 	m.previewScroll = 0
 	return m, m.previewCmdFor(target)
+}
+
+func (m *Model) setPreview(target, body string, err error) {
+	m.previewTarget = target
+	m.preview = body
+	m.previewErr = err
+	m.previewRows = nil
+	m.previewRowsReady = false
+	m.previewRowsDiff = false
+	if err == nil && body != "" {
+		m.previewRows, m.previewRowsDiff = normalizePreviewRows(body)
+		m.previewRowsReady = true
+	}
 }
 
 func (m Model) previewCmdFor(target string) tea.Cmd {
