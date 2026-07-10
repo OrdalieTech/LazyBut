@@ -2584,8 +2584,9 @@ func syncSummary(lane lane) (behind, ahead int, forceRequired, synced, integrate
 	}
 	switch lane.PushStatus {
 	case "integrated":
-		// Branch has been merged into the target — no push needed, branch is shippable.
-		integrated = true
+		// An open review is authoritative even if GitButler considers the current
+		// commit set integrated into the target.
+		synced = behind == 0
 	case "nothingToPush", "fullyPushed", "":
 		synced = behind == 0
 	case "completelyUnpushed":
@@ -2608,6 +2609,9 @@ func reviewMerged(lane lane) bool {
 }
 
 func branchMergedUpstream(lane lane) bool {
+	if lane.ReviewID != "" || lane.ReviewURL != "" || lane.ReviewState != "" || lane.ReviewMergedAt != "" {
+		return reviewMerged(lane)
+	}
 	return lane.PushStatus == "integrated" || reviewMerged(lane)
 }
 

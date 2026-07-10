@@ -477,6 +477,36 @@ func TestSyncChipShapes(t *testing.T) {
 	}
 }
 
+func TestOpenReviewOverridesIntegratedBranchStatus(t *testing.T) {
+	lane := lane{
+		Kind:        laneAppliedBranch,
+		PushStatus:  "integrated",
+		ReviewID:    "815",
+		ReviewState: "OPEN",
+	}
+
+	if branchMergedUpstream(lane) {
+		t.Fatal("open review must not be treated as merged")
+	}
+	if got := syncChip(lane); !strings.Contains(got, glyphCheck) || strings.Contains(got, "merged") {
+		t.Fatalf("open integrated review should render as synced, got %q", got)
+	}
+}
+
+func TestMergedBranchWithAssignedChangesIsNotCleaned(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	model.data.Lanes = []lane{{
+		Kind:        laneAppliedBranch,
+		Name:        "feature/ui",
+		PushStatus:  "integrated",
+		ChangeCount: 1,
+	}}
+
+	if got := model.mergedUpstreamBranchNames(); len(got) != 0 {
+		t.Fatalf("merged branch with assigned changes should not be cleaned: %#v", got)
+	}
+}
+
 func TestLaneFooterShowsPushLoadingInPlaceOfAheadArrow(t *testing.T) {
 	model := newModel(gitbutler.NewClient(".", nil))
 	model.loading = true
@@ -665,6 +695,7 @@ func TestUpstreamConfirmShowsMergedBranchCleanup(t *testing.T) {
 	status.UpstreamState.Behind = 0
 	status.UpstreamState.LatestCommit = status.MergeBase
 	status.UpstreamState.UpstreamCommits = nil
+	status.Stacks[0].AssignedChanges = nil
 	state := "MERGED"
 	status.Stacks[0].Branches[0].ReviewState = &state
 	status.Stacks[0].Branches[0].BranchStatus = gitbutler.StatusText("nothingToPush")

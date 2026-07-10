@@ -44,6 +44,7 @@ func markFixtureBranchMerged(status *gitbutler.WorkspaceStatus) {
 	status.UpstreamState.Behind = 0
 	status.UpstreamState.LatestCommit = status.MergeBase
 	status.UpstreamState.UpstreamCommits = nil
+	status.Stacks[0].AssignedChanges = nil
 	state := "MERGED"
 	status.Stacks[0].Branches[0].ReviewState = &state
 	status.Stacks[0].Branches[0].BranchStatus = gitbutler.StatusText("nothingToPush")

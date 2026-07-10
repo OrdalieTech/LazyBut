@@ -2086,7 +2086,7 @@ func (m Model) hasUpstreamWork() bool {
 func (m Model) mergedUpstreamBranchLanes() []lane {
 	out := []lane{}
 	for _, lane := range m.data.Lanes {
-		if lane.Kind == laneAppliedBranch && branchMergedUpstream(lane) {
+		if lane.Kind == laneAppliedBranch && lane.ChangeCount == 0 && branchMergedUpstream(lane) {
 			out = append(out, lane)
 		}
 	}
