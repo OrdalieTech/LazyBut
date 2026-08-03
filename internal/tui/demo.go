@@ -64,12 +64,8 @@ func renderDemoSnapshot(width, height int, overlay string) string {
 		model.mode = modeConfirm
 		model.confirm = confirmState{Action: action{ID: actionPull, Label: "update from upstream"}}
 	case "picker":
-		// Stage-to-branch picker — focus a change so the picker is populated.
-		stage := model.actionByID(actionStage)
-		updated, _ := model.startAction(stage)
-		if mm, ok := updated.(Model); ok {
-			model = mm
-		}
+		model.mode = modeTargetPicker
+		model.targetPicker = targetPickerState{Title: "move target", Action: action{ID: actionMove}, Items: model.branchItems()}
 	}
 	return model.View()
 }

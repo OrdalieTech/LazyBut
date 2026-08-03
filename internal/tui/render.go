@@ -1020,7 +1020,7 @@ func (m Model) loadingLines(width, height int) []string {
 	return fitStateLines([]string{
 		styleLoad.Render(spinnerFrame(m.spinnerFrame)) + "  " + styleLoad.Render("loading GitButler status"),
 		"",
-		styleDim.Render("LazyBut is open; `but status -j` is running in the background."),
+		styleDim.Render("LazyBut is open; `but status --json` is running in the background."),
 		styleDim.Render("Huge repositories can take a while; the UI should stay responsive."),
 		"",
 		styleHotKey.Render("q") + " " + styleHotLabel.Render("quit"),
@@ -1830,10 +1830,10 @@ func (m Model) contextActions() []action {
 		})
 	}
 
-	// Change selected — staging/discard/amend are the core file actions.
+	// Change selected — commit/discard/amend are the core file actions.
 	if hasItem && item.Kind == contentChange && item.ID != "" {
 		groups = append(groups, []actionID{
-			actionStage, actionDiscard, actionAmend, actionCommit,
+			actionCommit, actionDiscard, actionAmend,
 		})
 	}
 
@@ -1886,8 +1886,6 @@ func actionShortLabel(a action) string {
 		return "new"
 	case actionNewStacked:
 		return "stack"
-	case actionStage:
-		return "assign"
 	case actionCommit:
 		return "commit"
 	case actionAmend:
@@ -1912,12 +1910,10 @@ func actionShortLabel(a action) string {
 		return "update"
 	case actionPullCheck:
 		return "check"
-	case actionMerge:
-		return "merge"
+	case actionLand:
+		return "land"
 	case actionMove:
 		return "move"
-	case actionRub:
-		return "rub"
 	case actionSquash:
 		return "squash"
 	case actionUncommit:
@@ -2458,28 +2454,14 @@ func (m Model) renderTargetPicker() string {
 		if item.Meta != "" {
 			meta = " " + styleDim.Render(item.Meta)
 		}
-		check := ""
-		if m.targetPicker.Multi {
-			if m.targetPicker.Selected[idx] {
-				check = styleOk.Render("[✓] ")
-			} else {
-				check = styleFaint.Render("[ ] ")
-			}
-		}
-		fitted := fit("  "+check+item.Label, innerW-lipgloss.Width(meta))
+		fitted := fit("  "+item.Label, innerW-lipgloss.Width(meta))
 		if idx == m.targetPicker.Cursor {
 			rows = append(rows, styleSelectedRow.Render(padRight("▸ "+fitted[2:]+meta, innerW)))
 			continue
 		}
 		rows = append(rows, fitted+meta)
 	}
-	hints := []string{}
-	if m.targetPicker.Multi {
-		hints = append(hints, keyHint("space", "toggle"), keyHint("enter", "apply"))
-	} else {
-		hints = append(hints, keyHint("enter", "select"))
-	}
-	hints = append(hints, keyHint("j/k", "move"), keyHint("esc", "cancel"))
+	hints := []string{keyHint("enter", "select"), keyHint("j/k", "move"), keyHint("esc", "cancel")}
 	return renderModal(width, title, strings.Join(rows, "\n"), modalFooter(hints...))
 }
 
@@ -2584,8 +2566,9 @@ func syncSummary(lane lane) (behind, ahead int, forceRequired, synced, integrate
 	}
 	switch lane.PushStatus {
 	case "integrated":
-		// Branch has been merged into the target — no push needed, branch is shippable.
-		integrated = true
+		// An open review is authoritative even if GitButler considers the current
+		// commit set integrated into the target.
+		synced = behind == 0
 	case "nothingToPush", "fullyPushed", "":
 		synced = behind == 0
 	case "completelyUnpushed":
@@ -2608,6 +2591,9 @@ func reviewMerged(lane lane) bool {
 }
 
 func branchMergedUpstream(lane lane) bool {
+	if lane.ReviewID != "" || lane.ReviewURL != "" || lane.ReviewState != "" || lane.ReviewMergedAt != "" {
+		return reviewMerged(lane)
+	}
 	return lane.PushStatus == "integrated" || reviewMerged(lane)
 }
 

@@ -44,7 +44,7 @@ func TestClientStatusUsesJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner := &fakeRunner{outputs: map[string][]byte{"status -j": statusRaw}}
+	runner := &fakeRunner{outputs: map[string][]byte{"status --json": statusRaw}}
 	client := NewClient(".", runner)
 
 	status, err := client.Status(context.Background())
@@ -54,7 +54,7 @@ func TestClientStatusUsesJSON(t *testing.T) {
 	if status.UnassignedChanges[0].CLIID != "ur" {
 		t.Fatalf("unexpected status: %#v", status.UnassignedChanges)
 	}
-	if !reflect.DeepEqual(runner.calls[0], []string{"status", "-j"}) {
+	if !reflect.DeepEqual(runner.calls[0], []string{"status", "--json"}) {
 		t.Fatalf("calls = %#v", runner.calls)
 	}
 }
@@ -81,7 +81,7 @@ func TestClientStatusReconcilesStaleGitHubPRAndCachesResult(t *testing.T) {
 		"mergeBase": {},
 		"upstreamState": {}
 	}`)
-	butRunner := &fakeRunner{outputs: map[string][]byte{"status -j": statusRaw}}
+	butRunner := &fakeRunner{outputs: map[string][]byte{"status --json": statusRaw}}
 	ghRunner := &fakeRunner{outputs: map[string][]byte{
 		"pr list --state all --json number,url,headRefName,state,mergedAt --limit 1000": []byte(`[{"number":781,"url":"https://github.com/OrdalieTech/Ordalie-back/pull/781","headRefName":"glose-os-poc","state":"MERGED","mergedAt":"2026-07-08T13:08:08Z"}]`),
 	}}
@@ -119,7 +119,7 @@ func TestClientBranchListReconcilesStaleGitHubPR(t *testing.T) {
 		"appliedStacks": [{"id":"s1","heads":[{"name":"glose-os-poc","reviews":[{"number":700,"url":"https://github.com/OrdalieTech/Ordalie-back/pull/700","state":"OPEN"}]}]}],
 		"branches": []
 	}`)
-	butRunner := &fakeRunner{outputs: map[string][]byte{"branch list -j --all": branchRaw}}
+	butRunner := &fakeRunner{outputs: map[string][]byte{"branch list --json --all": branchRaw}}
 	ghRunner := &fakeRunner{outputs: map[string][]byte{
 		"pr list --state all --json number,url,headRefName,state,mergedAt --limit 1000": []byte(`[{"number":781,"url":"https://github.com/OrdalieTech/Ordalie-back/pull/781","headRefName":"glose-os-poc","state":"MERGED","mergedAt":"2026-07-08T13:08:08Z"}]`),
 	}}
@@ -151,7 +151,7 @@ func TestParseGitChanges(t *testing.T) {
 	}
 }
 
-func TestClientMutationUsesStatusAfter(t *testing.T) {
+func TestClientMutationUsesJSONStatusAfter(t *testing.T) {
 	statusRaw, err := os.ReadFile("testdata/status.json")
 	if err != nil {
 		t.Fatal(err)
@@ -159,11 +159,11 @@ func TestClientMutationUsesStatusAfter(t *testing.T) {
 	wrapped := append([]byte(`{"result":{},"status":`), statusRaw...)
 	wrapped = append(wrapped, '}')
 	runner := &fakeRunner{outputs: map[string][]byte{
-		"stage ur feature/ui -j --status-after": wrapped,
+		"commit -b feature/ui -m msg ur --json --status-after": wrapped,
 	}}
 	client := NewClient(".", runner)
 
-	status, err := client.Stage(context.Background(), "ur", "feature/ui")
+	status, err := client.Commit(context.Background(), "feature/ui", "msg", []string{"ur"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,9 +177,11 @@ func TestClientMutationAcceptsStringStatusAfter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	wrapped := append([]byte(`{"result":{},"status":`), statusRaw...)
+	wrapped = append(wrapped, '}')
 	runner := &fakeRunner{outputs: map[string][]byte{
-		"pull -j --status-after": []byte(`{"result":{},"status":"updated"}`),
-		"status -j":              statusRaw,
+		"pull --json --status-after": []byte(`{"result":{},"status":"updated"}`),
+		"status --json":              statusRaw,
 	}}
 	client := NewClient(".", runner)
 
@@ -191,8 +193,8 @@ func TestClientMutationAcceptsStringStatusAfter(t *testing.T) {
 		t.Fatalf("unexpected status: %#v", status.Stacks)
 	}
 	want := [][]string{
-		{"pull", "-j", "--status-after"},
-		{"status", "-j"},
+		{"pull", "--json", "--status-after"},
+		{"status", "--json"},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
@@ -201,8 +203,8 @@ func TestClientMutationAcceptsStringStatusAfter(t *testing.T) {
 
 func TestClientMutationRejectsMalformedStructuredStatusAfter(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
-		"pull -j --status-after": []byte(`{"result":{},"status":{"stacks":"bad"}}`),
-		"status -j":              []byte(`{}`),
+		"pull --json --status-after": []byte(`{"result":{},"status":{"stacks":"bad"}}`),
+		"status --json":              []byte(`{}`),
 	}}
 	client := NewClient(".", runner)
 
@@ -210,7 +212,7 @@ func TestClientMutationRejectsMalformedStructuredStatusAfter(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected parse error")
 	}
-	if !strings.Contains(err.Error(), "parse `but pull -j --status-after`") {
+	if !strings.Contains(err.Error(), "parse `but pull --json --status-after`") {
 		t.Fatalf("error = %v", err)
 	}
 	if len(runner.calls) != 1 {
@@ -218,28 +220,16 @@ func TestClientMutationRejectsMalformedStructuredStatusAfter(t *testing.T) {
 	}
 }
 
-func TestClientStageManyRunsSequentialStages(t *testing.T) {
-	statusRaw, err := os.ReadFile("testdata/status.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	wrapped := append([]byte(`{"result":{},"status":`), statusRaw...)
-	wrapped = append(wrapped, '}')
-	runner := &fakeRunner{outputs: map[string][]byte{
-		"stage a1 feature/ui -j --status-after": wrapped,
-		"stage a2 feature/ui -j --status-after": wrapped,
-	}}
+func TestClientCommitRefusesZeroChangeIDs(t *testing.T) {
+	runner := &fakeRunner{}
 	client := NewClient(".", runner)
 
-	if _, err := client.StageMany(context.Background(), []string{"a1", "a2"}, "feature/ui"); err != nil {
-		t.Fatal(err)
+	_, err := client.Commit(context.Background(), "feature/ui", "msg", []string{"", ""})
+	if err == nil || !strings.Contains(err.Error(), "without selected change IDs") {
+		t.Fatalf("error = %v", err)
 	}
-	want := [][]string{
-		{"stage", "a1", "feature/ui", "-j", "--status-after"},
-		{"stage", "a2", "feature/ui", "-j", "--status-after"},
-	}
-	if !reflect.DeepEqual(runner.calls, want) {
-		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	if len(runner.calls) != 0 {
+		t.Fatalf("calls = %#v, want none", runner.calls)
 	}
 }
 
@@ -256,75 +246,83 @@ func TestClientMutationCommandSurface(t *testing.T) {
 		key  string
 		call func(context.Context, *Client) error
 	}{
-		{"apply", "apply feature/ui -j --status-after", func(ctx context.Context, c *Client) error {
+		{"apply", "apply feature/ui --json --status-after", func(ctx context.Context, c *Client) error {
 			_, err := c.Apply(ctx, "feature/ui")
 			return err
 		}},
-		{"unapply", "unapply feature/ui --force -j --status-after", func(ctx context.Context, c *Client) error {
-			_, err := c.Unapply(ctx, "feature/ui", true)
+		{"unapply", "unapply feature/ui --json --status-after", func(ctx context.Context, c *Client) error {
+			_, err := c.Unapply(ctx, "feature/ui")
 			return err
 		}},
-		{"new stacked branch", "branch new --anchor feature/ui child -j --status-after", func(ctx context.Context, c *Client) error {
+		{"new stacked branch", "branch new --anchor feature/ui child --json --status-after", func(ctx context.Context, c *Client) error {
 			_, err := c.NewBranch(ctx, "child", "feature/ui")
 			return err
 		}},
-		{"reword", "reword feature/ui -m renamed -j --status-after", func(ctx context.Context, c *Client) error {
+		{"reword", "reword feature/ui -m renamed --json --status-after", func(ctx context.Context, c *Client) error {
 			_, err := c.Reword(ctx, "feature/ui", "renamed")
 			return err
 		}},
-		{"commit", "commit feature/ui -m msg --only --changes a1 --changes a2 -j --status-after", func(ctx context.Context, c *Client) error {
-			_, err := c.Commit(ctx, "feature/ui", "msg", []string{"a1", "a2"}, true)
+		{"commit", "commit -b feature/ui -m msg a1 a2 --json --status-after", func(ctx context.Context, c *Client) error {
+			_, err := c.Commit(ctx, "feature/ui", "msg", []string{"a1", "a2"})
 			return err
 		}},
-		{"amend", "amend a1 c1 -j --status-after", func(ctx context.Context, c *Client) error {
-			_, err := c.Amend(ctx, "a1", "c1")
+		{"amend", "amend -t c1 a1 --json --status-after", func(ctx context.Context, c *Client) error {
+			_, err := c.Amend(ctx, "c1", "a1")
 			return err
 		}},
-		{"absorb", "absorb -j --status-after", func(ctx context.Context, c *Client) error {
+		{"absorb", "absorb --json --status-after", func(ctx context.Context, c *Client) error {
 			_, err := c.Absorb(ctx)
 			return err
 		}},
-		{"squash", "squash c1 c2 -j --status-after", func(ctx context.Context, c *Client) error {
+		{"squash", "squash c1 -t c2 --use-target-message --json --status-after", func(ctx context.Context, c *Client) error {
 			_, err := c.Squash(ctx, "c1", "c2")
 			return err
 		}},
-		{"uncommit", "uncommit c1 -j --status-after", func(ctx context.Context, c *Client) error {
-			_, err := c.Uncommit(ctx, "c1", false)
+		{"uncommit", "uncommit c1 --json --status-after", func(ctx context.Context, c *Client) error {
+			_, err := c.Uncommit(ctx, "c1")
 			return err
 		}},
-		{"move", "move c1 feature/ui -j --status-after", func(ctx context.Context, c *Client) error {
-			_, err := c.Move(ctx, "c1", "feature/ui")
+		{"move commit", "move c1 -b feature/ui --json --status-after", func(ctx context.Context, c *Client) error {
+			_, err := c.MoveCommit(ctx, "c1", "feature/ui")
 			return err
 		}},
-		{"rub", "rub c1 zz -j --status-after", func(ctx context.Context, c *Client) error {
-			_, err := c.Rub(ctx, "c1", "zz")
+		{"stack branch", "move child --above feature/ui --json --status-after", func(ctx context.Context, c *Client) error {
+			_, err := c.MoveBranch(ctx, "child", "feature/ui")
 			return err
 		}},
-		{"pull", "pull -j --status-after", func(ctx context.Context, c *Client) error {
+		{"unstack branch", "move child --unstack --json --status-after", func(ctx context.Context, c *Client) error {
+			_, err := c.MoveBranch(ctx, "child", "zz")
+			return err
+		}},
+		{"land", "land feature/ui --yes --json --status-after", func(ctx context.Context, c *Client) error {
+			_, err := c.Land(ctx, "feature/ui")
+			return err
+		}},
+		{"pull", "pull --json --status-after", func(ctx context.Context, c *Client) error {
 			_, err := c.Pull(ctx)
 			return err
 		}},
-		{"resolve finish", "resolve finish -j --status-after", func(ctx context.Context, c *Client) error {
+		{"resolve finish", "resolve finish --json --status-after", func(ctx context.Context, c *Client) error {
 			_, err := c.ResolveFinish(ctx)
 			return err
 		}},
-		{"resolve cancel", "resolve cancel -j --status-after", func(ctx context.Context, c *Client) error {
+		{"resolve cancel", "resolve cancel --json --status-after", func(ctx context.Context, c *Client) error {
 			_, err := c.ResolveCancel(ctx)
 			return err
 		}},
-		{"undo", "undo -j --status-after", func(ctx context.Context, c *Client) error {
+		{"undo", "undo --json --status-after", func(ctx context.Context, c *Client) error {
 			_, err := c.Undo(ctx)
 			return err
 		}},
-		{"oplog restore", "oplog restore snap --force -j --status-after", func(ctx context.Context, c *Client) error {
+		{"oplog restore", "oplog restore snap --json --status-after", func(ctx context.Context, c *Client) error {
 			_, err := c.OplogRestore(ctx, "snap")
 			return err
 		}},
-		{"clean", "clean -j --status-after", func(ctx context.Context, c *Client) error {
+		{"clean", "clean --json --status-after", func(ctx context.Context, c *Client) error {
 			_, err := c.Clean(ctx)
 			return err
 		}},
-		{"discard", "discard a1 -j --status-after", func(ctx context.Context, c *Client) error {
+		{"discard", "discard a1 --json --status-after", func(ctx context.Context, c *Client) error {
 			_, err := c.Discard(ctx, "a1")
 			return err
 		}},
@@ -399,24 +397,22 @@ func TestClientTextCommandSurface(t *testing.T) {
 	}
 }
 
-func TestClientDeleteBranchUsesPlainCommandThenStatus(t *testing.T) {
+func TestClientDeleteBranchUsesUndoableDiscard(t *testing.T) {
 	statusRaw, err := os.ReadFile("testdata/status.json")
 	if err != nil {
 		t.Fatal(err)
 	}
+	wrapped := append([]byte(`{"result":{},"status":`), statusRaw...)
+	wrapped = append(wrapped, '}')
 	runner := &fakeRunner{outputs: map[string][]byte{
-		"branch delete feature/ui": []byte("deleted"),
-		"status -j":                statusRaw,
+		"discard feature/ui --json --status-after": wrapped,
 	}}
 	client := NewClient(".", runner)
 
 	if _, err := client.DeleteBranch(context.Background(), "feature/ui"); err != nil {
 		t.Fatal(err)
 	}
-	want := [][]string{
-		{"branch", "delete", "feature/ui"},
-		{"status", "-j"},
-	}
+	want := [][]string{{"discard", "feature/ui", "--json", "--status-after"}}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
 	}
@@ -430,11 +426,11 @@ func TestClientSetupAndPRActionsUseStatusAfter(t *testing.T) {
 	wrapped := append([]byte(`{"result":{},"status":`), statusRaw...)
 	wrapped = append(wrapped, '}')
 	runner := &fakeRunner{outputs: map[string][]byte{
-		"setup --init -j --status-after":            wrapped,
-		"pr set-ready feature/ui -j --status-after": wrapped,
-		"pr set-draft feature/ui -j --status-after": wrapped,
-		"merge feature/ui -j --status-after":        wrapped,
-		"push feature/ui --dry-run":                 []byte("dry-run ok"),
+		"setup --init --json --status-after":            wrapped,
+		"pr set-ready feature/ui --json --status-after": wrapped,
+		"pr set-draft feature/ui --json --status-after": wrapped,
+		"land feature/ui --yes --json --status-after":   wrapped,
+		"push feature/ui --dry-run":                     []byte("dry-run ok"),
 	}}
 	client := NewClient(".", runner)
 
@@ -447,7 +443,7 @@ func TestClientSetupAndPRActionsUseStatusAfter(t *testing.T) {
 	if _, err := client.SetPRDraft(context.Background(), "feature/ui"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.Merge(context.Background(), "feature/ui"); err != nil {
+	if _, err := client.Land(context.Background(), "feature/ui"); err != nil {
 		t.Fatal(err)
 	}
 	out, err := client.PushDryRun(context.Background(), "feature/ui")
@@ -466,7 +462,7 @@ func TestClientPushRefreshesWithoutStatusAfter(t *testing.T) {
 	}
 	runner := &fakeRunner{outputs: map[string][]byte{
 		"push feature/ui --with-force": []byte("pushed"),
-		"status -j":                    statusRaw,
+		"status --json":                statusRaw,
 	}}
 	client := NewClient(".", runner)
 
@@ -479,7 +475,7 @@ func TestClientPushRefreshesWithoutStatusAfter(t *testing.T) {
 	}
 	want := [][]string{
 		{"push", "feature/ui", "--with-force"},
-		{"status", "-j"},
+		{"status", "--json"},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
@@ -488,8 +484,8 @@ func TestClientPushRefreshesWithoutStatusAfter(t *testing.T) {
 
 func TestClientParsesCLIError(t *testing.T) {
 	runner := &fakeRunner{
-		outputs: map[string][]byte{"status -j": []byte(`{"error":"setup_required","message":"unable to open database file","hint":"run but setup"}`)},
-		errs:    map[string]error{"status -j": errors.New("exit status 1")},
+		outputs: map[string][]byte{"status --json": []byte(`{"error":"setup_required","message":"unable to open database file","hint":"run but setup"}`)},
+		errs:    map[string]error{"status --json": errors.New("exit status 1")},
 	}
 	client := NewClient(".", runner)
 
@@ -511,13 +507,13 @@ func TestClientParsesCLIError(t *testing.T) {
 
 func TestClientParsesMixedCLIErrorOutput(t *testing.T) {
 	runner := &fakeRunner{
-		outputs: map[string][]byte{"status -j": []byte(`{
+		outputs: map[string][]byte{"status --json": []byte(`{
   "error": "setup_required",
   "message": "No GitButler project found at .",
   "hint": "run ` + "`but setup`" + ` to configure the project"
 }
 Error: Setup required: No GitButler project found at .`)},
-		errs: map[string]error{"status -j": errors.New("exit status 1")},
+		errs: map[string]error{"status --json": errors.New("exit status 1")},
 	}
 	client := NewClient(".", runner)
 
@@ -541,45 +537,5 @@ func TestParseCommandErrorForMissingBut(t *testing.T) {
 	}
 	if !IsCLINotFound(err) {
 		t.Fatalf("cli-not-found helper missed: %v", err)
-	}
-}
-
-func TestParseCommandErrorForOldGitButlerCLI(t *testing.T) {
-	raw := []byte("error: unexpected argument '-j' found\n\nUsage: but status [OPTIONS]")
-	err := parseCommandError(raw, errors.New("exit status 2"))
-	if err == nil || !strings.Contains(err.Error(), "GitButler CLI is too old for LazyBut") {
-		t.Fatalf("error = %v", err)
-	}
-	if strings.Contains(err.Error(), "exit status 2") {
-		t.Fatalf("error should hide raw exit status: %v", err)
-	}
-}
-
-func TestRunJSONFallsBackToFormatJSON(t *testing.T) {
-	statusRaw, err := os.ReadFile("testdata/status.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	runner := &fakeRunner{
-		outputs: map[string][]byte{
-			"status -j":            []byte("error: unexpected argument '-j' found"),
-			"status --format json": statusRaw,
-		},
-		errs: map[string]error{
-			"status -j": errors.New("exit status 2"),
-		},
-	}
-	client := NewClient(".", runner)
-
-	status, err := client.Status(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if status.UnassignedChanges[0].CLIID != "ur" {
-		t.Fatalf("unexpected status: %#v", status.UnassignedChanges)
-	}
-	want := [][]string{{"status", "-j"}, {"status", "--format", "json"}}
-	if !reflect.DeepEqual(runner.calls, want) {
-		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
 	}
 }

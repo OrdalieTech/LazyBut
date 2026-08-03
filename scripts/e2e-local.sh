@@ -8,7 +8,7 @@ WORK_ROOT="$(mktemp -d "$TMP_BASE/lazybut-e2e.XXXXXX")"
 REMOTE="$WORK_ROOT/remote.git"
 REPO="$WORK_ROOT/repo"
 CLONE="$WORK_ROOT/clone"
-MERGE_REPO="$WORK_ROOT/merge-repo"
+LAND_REPO="$WORK_ROOT/land-repo"
 BIN="$WORK_ROOT/lazybut"
 CLEANUP="${LAZYBUT_E2E_KEEP:-0}"
 
@@ -18,7 +18,7 @@ cleanup() {
     return
   fi
   but -C "$REPO" teardown >/dev/null 2>&1 || true
-  but -C "$MERGE_REPO" teardown >/dev/null 2>&1 || true
+  but -C "$LAND_REPO" teardown >/dev/null 2>&1 || true
   rm -rf "$WORK_ROOT"
 }
 trap cleanup EXIT
@@ -40,8 +40,9 @@ run_retry() {
     if "$@" >"$output" 2>&1; then
       cat "$output"
       return 0
+    else
+      status=$?
     fi
-    status=$?
     if ! grep -qi 'database is locked' "$output" || [[ "$attempt" == "5" ]]; then
       cat "$output" >&2
       return "$status"
@@ -52,7 +53,17 @@ run_retry() {
 }
 
 status_json() {
-  run_retry but -C "$REPO" status -j >/dev/null
+  run_retry but -C "$REPO" status --json >/dev/null
+}
+
+change_id() {
+  local repo="$1" path="$2"
+  but -C "$repo" status --json | jq -er --arg path "$path" '(.uncommittedChanges // .unassignedChanges // [])[] | select(.filePath == $path) | .cliId'
+}
+
+branch_commit_ids() {
+  local repo="$1" branch="$2"
+  but -C "$repo" status --json | jq -er --arg branch "$branch" '.stacks[].branches[] | select(.name == $branch) | .commits[].cliId'
 }
 
 log "build lazybut"
@@ -78,27 +89,57 @@ run "$BIN" -C "$REPO" -snapshot 140x36 >/dev/null
 run "$BIN" -C "$REPO" -snapshot 96x28 >/dev/null
 run "$BIN" -C "$REPO" -snapshot 60x20 >/dev/null
 
-log "branch create, stage, commit"
-run_retry but -C "$REPO" branch new e2e-alpha
+log "branch create, unapply, and apply"
+run_retry but -C "$REPO" branch new e2e-empty --json --status-after >/dev/null
+run_retry but -C "$REPO" unapply e2e-empty --json --status-after >/dev/null
+run_retry but -C "$REPO" apply e2e-empty --json --status-after >/dev/null
+
+log "branch create and selected commit"
 printf 'alpha one\n' >"$REPO/alpha.txt"
-run_retry but -C "$REPO" status -j
-run_retry but -C "$REPO" stage alpha.txt e2e-alpha --status-after -j >/dev/null
-run_retry but -C "$REPO" commit e2e-alpha -m "add alpha" --status-after -j >/dev/null
+ALPHA_ID="$(change_id "$REPO" alpha.txt)"
+run_retry but -C "$REPO" commit -b e2e-alpha -m "add alpha" "$ALPHA_ID" --json --status-after >/dev/null
 status_json
 
-log "partial commit with selected file ids shape"
+log "second selected commit"
 printf 'beta one\n' >"$REPO/beta.txt"
-run_retry but -C "$REPO" stage beta.txt e2e-alpha --status-after -j >/dev/null
-run_retry but -C "$REPO" commit e2e-alpha --only -m "add beta" --status-after -j >/dev/null
+BETA_ID="$(change_id "$REPO" beta.txt)"
+run_retry but -C "$REPO" commit -b e2e-alpha -m "add beta" "$BETA_ID" --json --status-after >/dev/null
 status_json
+
+log "amend, squash, uncommit, and recommit"
+printf 'amended\n' >"$REPO/amended.txt"
+AMEND_ID="$(change_id "$REPO" amended.txt)"
+run_retry but -C "$REPO" amend -t e2e-alpha "$AMEND_ID" --json --status-after >/dev/null
+mapfile -t ALPHA_COMMITS < <(branch_commit_ids "$REPO" e2e-alpha)
+[[ "${#ALPHA_COMMITS[@]}" == "2" ]]
+run_retry but -C "$REPO" squash "${ALPHA_COMMITS[0]}" -t "${ALPHA_COMMITS[1]}" --use-target-message --json --status-after >/dev/null
+mapfile -t ALPHA_COMMITS < <(branch_commit_ids "$REPO" e2e-alpha)
+[[ "${#ALPHA_COMMITS[@]}" == "1" ]]
+run_retry but -C "$REPO" uncommit "${ALPHA_COMMITS[0]}" --json --status-after >/dev/null
+mapfile -t RECOMMIT_IDS < <(but -C "$REPO" status --json | jq -er '(.uncommittedChanges // .unassignedChanges // [])[].cliId')
+[[ "${#RECOMMIT_IDS[@]}" == "3" ]]
+run_retry but -C "$REPO" commit -b e2e-alpha -m "recommit alpha" "${RECOMMIT_IDS[@]}" --json --status-after >/dev/null
+
+log "discard change and branch"
+printf 'discard me\n' >"$REPO/discard.txt"
+DISCARD_ID="$(change_id "$REPO" discard.txt)"
+run_retry but -C "$REPO" discard "$DISCARD_ID" --json --status-after >/dev/null
+[[ ! -e "$REPO/discard.txt" ]]
+printf 'delete me\n' >"$REPO/delete.txt"
+DELETE_ID="$(change_id "$REPO" delete.txt)"
+run_retry but -C "$REPO" commit -b e2e-delete -m "delete branch" "$DELETE_ID" --json --status-after >/dev/null
+run_retry but -C "$REPO" discard e2e-delete --json --status-after >/dev/null
+! but -C "$REPO" status --json | jq -e '.stacks[].branches[] | select(.name == "e2e-delete")' >/dev/null
 
 log "stacked branch and history edits"
-run_retry but -C "$REPO" branch new --anchor e2e-alpha e2e-beta
 printf 'stacked\n' >"$REPO/stacked.txt"
-run_retry but -C "$REPO" stage stacked.txt e2e-beta --status-after -j >/dev/null
-run_retry but -C "$REPO" commit e2e-beta -m "add stacked" --status-after -j >/dev/null
-run_retry but -C "$REPO" reword e2e-beta -m "e2e-beta-renamed" --status-after -j >/dev/null
-run_retry but -C "$REPO" branch show e2e-beta-renamed --files -j >/dev/null
+STACKED_ID="$(change_id "$REPO" stacked.txt)"
+run_retry but -C "$REPO" commit -b e2e-beta -m "add stacked" "$STACKED_ID" --json --status-after >/dev/null
+run_retry but -C "$REPO" move e2e-beta --above e2e-alpha --json --status-after >/dev/null
+run_retry but -C "$REPO" move e2e-beta --unstack --json --status-after >/dev/null
+run_retry but -C "$REPO" move e2e-beta --above e2e-alpha --json --status-after >/dev/null
+run_retry but -C "$REPO" reword e2e-beta -m "e2e-beta-renamed" --json --status-after >/dev/null
+run_retry but -C "$REPO" branch show e2e-beta-renamed --files --json >/dev/null
 status_json
 
 log "push dry-run and push"
@@ -116,31 +157,31 @@ run git -C "$CLONE" add README.md
 run git -C "$CLONE" commit -m "remote update"
 run git -C "$CLONE" push origin main
 run_retry but -C "$REPO" pull --check
-run_retry but -C "$REPO" pull --status-after -j >/dev/null
+run_retry but -C "$REPO" pull --json --status-after >/dev/null
 status_json
 
 log "undo, oplog, clean"
-run_retry but -C "$REPO" undo --status-after -j >/dev/null
+run_retry but -C "$REPO" undo --json --status-after >/dev/null
 run_retry but -C "$REPO" oplog snapshot -m "lazybut e2e snapshot"
 run_retry but -C "$REPO" clean --dry-run
-run_retry but -C "$REPO" clean --status-after -j >/dev/null
+run_retry but -C "$REPO" clean --json --status-after >/dev/null
 status_json
 
-log "merge with gb-local target"
-run git init "$MERGE_REPO"
-run git -C "$MERGE_REPO" config user.name "Lazybut E2E"
-run git -C "$MERGE_REPO" config user.email "lazybut-e2e@example.test"
-printf 'base\n' >"$MERGE_REPO/README.md"
-run git -C "$MERGE_REPO" add README.md
-run git -C "$MERGE_REPO" commit -m "base"
-run git -C "$MERGE_REPO" branch -M main
-run_retry but -C "$MERGE_REPO" setup --init
-run_retry but -C "$MERGE_REPO" branch new e2e-merge
-printf 'merge me\n' >"$MERGE_REPO/merge.txt"
-run_retry but -C "$MERGE_REPO" stage merge.txt e2e-merge --status-after -j >/dev/null
-run_retry but -C "$MERGE_REPO" commit e2e-merge -m "merge branch" --status-after -j >/dev/null
-run_retry but -C "$MERGE_REPO" merge e2e-merge --status-after -j >/dev/null
-run_retry but -C "$MERGE_REPO" status -j >/dev/null
+log "land with local target"
+run git init "$LAND_REPO"
+run git -C "$LAND_REPO" config user.name "Lazybut E2E"
+run git -C "$LAND_REPO" config user.email "lazybut-e2e@example.test"
+printf 'base\n' >"$LAND_REPO/README.md"
+run git -C "$LAND_REPO" add README.md
+run git -C "$LAND_REPO" commit -m "base"
+run git -C "$LAND_REPO" branch -M main
+run_retry but -C "$LAND_REPO" setup --init
+printf 'land me\n' >"$LAND_REPO/land.txt"
+LAND_ID="$(change_id "$LAND_REPO" land.txt)"
+run_retry but -C "$LAND_REPO" commit -b e2e-land -m "land branch" "$LAND_ID" --json --status-after >/dev/null
+run_retry but -C "$LAND_REPO" land e2e-land --yes --json --status-after >/dev/null
+run_retry but -C "$LAND_REPO" status --json >/dev/null
+git -C "$LAND_REPO" show gb-local/main:land.txt | grep -qx 'land me'
 
 log "error surfaces"
 if "$BIN" --but-bin "$TMP_BASE/missing-but" -C "$REPO" -snapshot 80x20 | grep -q "install GitButler CLI"; then

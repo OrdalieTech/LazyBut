@@ -88,7 +88,6 @@ type FileChange struct {
 type BranchList struct {
 	AppliedStacks []BranchListStack `json:"appliedStacks"`
 	Branches      []BranchListItem  `json:"branches"`
-	MoreBranches  *int              `json:"moreBranches"`
 }
 
 type BranchListStack struct {
@@ -120,7 +119,7 @@ type Author struct {
 	Email *string `json:"email"`
 }
 
-// OplogEntry is one row in `but oplog list -j`. CreatedAt is a unix millisecond
+// OplogEntry is one row in `but oplog list --json`. CreatedAt is a unix millisecond
 // timestamp (GitButler emits it as a number, not RFC3339).
 type OplogEntry struct {
 	ID        string       `json:"id"`
