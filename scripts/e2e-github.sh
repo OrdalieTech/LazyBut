@@ -5,7 +5,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OWNER="${LAZYBUT_GH_OWNER:-netapy}"
 REPO_NAME="${LAZYBUT_GH_REPO:-lazybut-e2e-$(date +%Y%m%d%H%M%S)-$RANDOM}"
 FULL_REPO="$OWNER/$REPO_NAME"
-WORK_ROOT="$(mktemp -d /private/tmp/lazybut-gh-e2e.XXXXXX)"
+TMP_BASE="${TMPDIR:-/tmp}"
+TMP_BASE="${TMP_BASE%/}"
+WORK_ROOT="$(mktemp -d "$TMP_BASE/lazybut-gh-e2e.XXXXXX")"
 REPO="$WORK_ROOT/repo"
 BIN="$WORK_ROOT/lazybut"
 KEEP="${LAZYBUT_E2E_KEEP:-0}"
@@ -48,8 +50,9 @@ run_retry() {
     if "$@" >"$output" 2>&1; then
       cat "$output"
       return 0
+    else
+      status=$?
     fi
-    status=$?
     if ! grep -Eiq 'database is locked|not mergeable|mergeable state|could not resolve to a pull request' "$output" || [[ "$attempt" == "6" ]]; then
       cat "$output" >&2
       return "$status"
@@ -67,8 +70,9 @@ capture_retry() {
     if "$@" >"$output" 2>&1; then
       cat "$output"
       return 0
+    else
+      status=$?
     fi
-    status=$?
     if ! grep -Eiq 'database is locked|not mergeable|mergeable state|could not resolve to a pull request' "$output" || [[ "$attempt" == "6" ]]; then
       cat "$output" >&2
       return "$status"
@@ -76,6 +80,11 @@ capture_retry() {
     printf 'transient failure, retrying...\n' >&2
     sleep 2
   done
+}
+
+change_id() {
+  local repo="$1" path="$2"
+  but -C "$repo" status --json | jq -er --arg path "$path" '(.uncommittedChanges // .unassignedChanges // [])[] | select(.filePath == $path) | .cliId'
 }
 
 require_delete_repo_scope() {
@@ -99,7 +108,7 @@ log "preflight GitHub auth"
 require_delete_repo_scope
 
 log "build lazybut"
-run env GOCACHE=/private/tmp/lazybutler-gocache go -C "$ROOT" build -o "$BIN" ./cmd/lazybut
+run env GOCACHE="$TMP_BASE/lazybutler-gocache" go -C "$ROOT" build -o "$BIN" ./cmd/lazybut
 
 log "create temporary GitHub repo"
 run gh repo create "$FULL_REPO" --private --disable-issues --disable-wiki
@@ -118,28 +127,27 @@ run git -C "$REPO" push -u origin main
 
 log "setup GitButler and render lazybut"
 run_retry but -C "$REPO" setup --init
-run_retry but -C "$REPO" status -j >/dev/null
+run_retry but -C "$REPO" status --json >/dev/null
 run "$BIN" -C "$REPO" -snapshot 140x36 >/dev/null
 run "$BIN" -C "$REPO" -snapshot 96x28 >/dev/null
 run "$BIN" -C "$REPO" -snapshot 60x20 >/dev/null
 
 log "commit and push GitButler branch to GitHub"
-run_retry but -C "$REPO" branch new e2e-alpha
 printf 'alpha\n' >"$REPO/alpha.txt"
-run_retry but -C "$REPO" stage alpha.txt e2e-alpha --status-after -j >/dev/null
-run_retry but -C "$REPO" commit e2e-alpha -m "add alpha" --status-after -j >/dev/null
+ALPHA_ID="$(change_id "$REPO" alpha.txt)"
+run_retry but -C "$REPO" commit -b e2e-alpha -m "add alpha" "$ALPHA_ID" --json --status-after >/dev/null
 run_retry but -C "$REPO" push e2e-alpha
 
 log "create and update GitHub PR through GitButler"
 run_retry but -C "$REPO" pr new e2e-alpha --default
 PR_NUMBER="$(capture_retry gh pr view e2e-alpha --repo "$FULL_REPO" --json number -q .number)"
-run_retry but -C "$REPO" pr set-draft e2e-alpha --status-after -j >/dev/null
-run_retry but -C "$REPO" pr set-ready e2e-alpha --status-after -j >/dev/null
+run_retry but -C "$REPO" pr set-draft e2e-alpha --json --status-after >/dev/null
+run_retry but -C "$REPO" pr set-ready e2e-alpha --json --status-after >/dev/null
 
 log "merge PR on GitHub and pull through GitButler"
 run_retry gh pr merge "$PR_NUMBER" --repo "$FULL_REPO" --merge --delete-branch
 run_retry but -C "$REPO" pull --check
-run_retry but -C "$REPO" pull --status-after -j >/dev/null
+run_retry but -C "$REPO" pull --json --status-after >/dev/null
 run "$BIN" -C "$REPO" -snapshot 120x30 >/dev/null
 
 log "done"

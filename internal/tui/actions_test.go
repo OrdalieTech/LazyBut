@@ -44,6 +44,7 @@ func markFixtureBranchMerged(status *gitbutler.WorkspaceStatus) {
 	status.UpstreamState.Behind = 0
 	status.UpstreamState.LatestCommit = status.MergeBase
 	status.UpstreamState.UpstreamCommits = nil
+	status.Stacks[0].AssignedChanges = nil
 	state := "MERGED"
 	status.Stacks[0].Branches[0].ReviewState = &state
 	status.Stacks[0].Branches[0].BranchStatus = gitbutler.StatusText("nothingToPush")
@@ -272,7 +273,7 @@ func TestBranchActionsIncludeDryRunAndPRLifecycle(t *testing.T) {
 	for _, action := range model.availableActions() {
 		seen[action.ID] = true
 	}
-	for _, want := range []actionID{actionAddBranch, actionPushDryRun, actionNewDraftPR, actionPRDraft, actionPRReady, actionMerge} {
+	for _, want := range []actionID{actionAddBranch, actionPushDryRun, actionNewDraftPR, actionPRDraft, actionPRReady, actionLand} {
 		if !seen[want] {
 			t.Fatalf("missing %s in branch actions: %#v", want, seen)
 		}
@@ -289,14 +290,102 @@ func TestLazyGitStyleKeyAliases(t *testing.T) {
 	for _, action := range model.availableActions() {
 		seen[action.ID] = action
 	}
-	if !seen[actionStage].matches("a") {
-		t.Fatalf("stage should accept lazygit-style a alias")
-	}
 	if !seen[actionAmend].matches("A") || !seen[actionAmend].matches("i") {
 		t.Fatalf("amend aliases missing: %#v", seen[actionAmend])
 	}
 	if !seen[actionDiscard].matches("d") || !seen[actionDiscard].matches("X") {
 		t.Fatalf("discard aliases missing: %#v", seen[actionDiscard])
+	}
+}
+
+func TestCommitOnZZUsesSoleAppliedBranchAndSelectedIDs(t *testing.T) {
+	status := loadFixtureStatus(t)
+	wrapped := wrapStatusAfter(t, status)
+	runner := &actionRunner{outputs: map[string][]byte{
+		"commit -b feature/ui -m selected ur --json --status-after": wrapped,
+	}}
+	model := newModel(gitbutler.NewClient(".", runner))
+	model.data = buildWorkspaceData(status, loadFixtureBranches(t))
+	model.laneCursor = 0
+	model.contentCursor = 0
+
+	if !actionIDs(model.availableActions())[actionCommit] {
+		t.Fatal("commit should be available for a zz change with one applied branch")
+	}
+	_, cmd := model.execute(action{ID: actionCommit}, "selected")
+	if cmd == nil {
+		t.Fatal("expected commit command")
+	}
+	if msg := cmd().(mutationMsg); msg.err != nil {
+		t.Fatal(msg.err)
+	}
+	want := [][]string{{"commit", "-b", "feature/ui", "-m", "selected", "ur", "--json", "--status-after"}}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
+func TestCommitOnZZPromptsForBranchWhenAmbiguous(t *testing.T) {
+	status := loadFixtureStatus(t)
+	status.Stacks = append(status.Stacks, gitbutler.Stack{Branches: []gitbutler.Branch{{Name: "feature/other"}}})
+	wrapped := wrapStatusAfter(t, status)
+	runner := &actionRunner{outputs: map[string][]byte{
+		"commit -b feature/other -m selected ur --json --status-after": wrapped,
+	}}
+	model := newModel(gitbutler.NewClient(".", runner))
+	model.data = buildWorkspaceData(status, loadFixtureBranches(t))
+	model.laneCursor = 0
+	model.contentCursor = 0
+
+	if !actionIDs(model.availableActions())[actionCommit] {
+		t.Fatal("commit should be available when a target branch can be selected")
+	}
+	nextModel, cmd := model.startAction(model.actionByID(actionCommit))
+	next := nextModel.(Model)
+	if cmd != nil || next.mode != modeTargetPicker || len(next.targetPicker.Items) != 2 {
+		t.Fatalf("commit target picker = mode %d, items %d, cmd nil=%v", next.mode, len(next.targetPicker.Items), cmd == nil)
+	}
+	next.targetPicker.Cursor = 1
+	nextModel, cmd = next.handleTargetPickerKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next = nextModel.(Model)
+	if cmd != nil || next.mode != modeInput || next.prompt.Action.Target != "feature/other" {
+		t.Fatalf("commit prompt = mode %d, target %q, cmd nil=%v", next.mode, next.prompt.Action.Target, cmd == nil)
+	}
+	next.prompt.Value = "selected"
+	_, cmd = next.handleInputKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected targeted commit command")
+	}
+	if msg := cmd().(mutationMsg); msg.err != nil {
+		t.Fatal(msg.err)
+	}
+	want := [][]string{{"commit", "-b", "feature/other", "-m", "selected", "ur", "--json", "--status-after"}}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
+func TestSquashPickerUsesSelectedSourceAndStableTargetOrder(t *testing.T) {
+	status := loadFixtureStatus(t)
+	status.Stacks[0].Branches[0].Commits = []gitbutler.Commit{
+		{CLIID: "c3", Message: "third"},
+		{CLIID: "c2", Message: "second"},
+		{CLIID: "c1", Message: "first"},
+	}
+	model := newModel(gitbutler.NewClient(".", nil))
+	model.data = buildWorkspaceData(status, loadFixtureBranches(t))
+	model.laneCursor = 1
+	model.contentCursor = 2 // c2; assigned change is row 0
+
+	action := model.actionByID(actionSquash)
+	picker, ok := model.pickerForAction(action)
+	if !ok {
+		t.Fatal("expected squash target picker")
+	}
+	got := []string{picker.Items[0].Value, picker.Items[1].Value}
+	want := []string{"c3", "c1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("targets = %#v, want displayed history order %#v", got, want)
 	}
 }
 
@@ -444,7 +533,7 @@ func TestAddBranchPickerAppliesInactiveBranch(t *testing.T) {
 	wrapped = append(wrapped, '}')
 
 	runner := &actionRunner{outputs: map[string][]byte{
-		"apply feature/unapplied -j --status-after": wrapped,
+		"apply feature/unapplied --json --status-after": wrapped,
 	}}
 	model := newModel(gitbutler.NewClient(".", runner))
 	model.data = buildWorkspaceData(loadFixtureStatus(t), loadFixtureBranches(t))
@@ -455,7 +544,7 @@ func TestAddBranchPickerAppliesInactiveBranch(t *testing.T) {
 		t.Fatalf("expected apply command, next=%#v", next)
 	}
 	_ = cmd()
-	if !reflect.DeepEqual(runner.calls, [][]string{{"apply", "feature/unapplied", "-j", "--status-after"}}) {
+	if !reflect.DeepEqual(runner.calls, [][]string{{"apply", "feature/unapplied", "--json", "--status-after"}}) {
 		t.Fatalf("calls = %#v", runner.calls)
 	}
 }
@@ -466,7 +555,7 @@ func TestAddBranchPickerLazyLoadsBranchList(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &actionRunner{outputs: map[string][]byte{
-		"branch list -j --all": branchesRaw,
+		"branch list --json --all": branchesRaw,
 	}}
 	model := newModel(gitbutler.NewClient(".", runner))
 	model.data = buildWorkspaceData(loadFixtureStatus(t), nil)
@@ -485,7 +574,7 @@ func TestAddBranchPickerLazyLoadsBranchList(t *testing.T) {
 	if opened.mode != modeBranchPicker || len(opened.data.BranchOptions) == 0 {
 		t.Fatalf("picker mode/options = %d/%d", opened.mode, len(opened.data.BranchOptions))
 	}
-	if !reflect.DeepEqual(runner.calls, [][]string{{"branch", "list", "-j", "--all"}}) {
+	if !reflect.DeepEqual(runner.calls, [][]string{{"branch", "list", "--json", "--all"}}) {
 		t.Fatalf("calls = %#v", runner.calls)
 	}
 }
@@ -516,6 +605,7 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 		name          string
 		id            actionID
 		input         string
+		focus         panel
 		laneCursor    int
 		contentCursor int
 		outputs       map[string][]byte
@@ -525,35 +615,35 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 			name: "refresh",
 			id:   actionRefresh,
 			outputs: map[string][]byte{
-				"status -j": statusRaw,
+				"status --json": statusRaw,
 			},
-			want: [][]string{{"status", "-j"}},
+			want: [][]string{{"status", "--json"}},
 		},
 		{
 			name: "setup",
 			id:   actionSetup,
 			outputs: map[string][]byte{
-				"setup -j --status-after": wrapped,
+				"setup --json --status-after": wrapped,
 			},
-			want: [][]string{{"setup", "-j", "--status-after"}},
+			want: [][]string{{"setup", "--json", "--status-after"}},
 		},
 		{
 			name:  "setup init",
 			id:    actionSetupInit,
 			input: "",
 			outputs: map[string][]byte{
-				"setup --init -j --status-after": wrapped,
+				"setup --init --json --status-after": wrapped,
 			},
-			want: [][]string{{"setup", "--init", "-j", "--status-after"}},
+			want: [][]string{{"setup", "--init", "--json", "--status-after"}},
 		},
 		{
 			name:  "new branch",
 			id:    actionNewBranch,
 			input: "feature/new",
 			outputs: map[string][]byte{
-				"branch new feature/new -j --status-after": wrapped,
+				"branch new feature/new --json --status-after": wrapped,
 			},
-			want: [][]string{{"branch", "new", "feature/new", "-j", "--status-after"}},
+			want: [][]string{{"branch", "new", "feature/new", "--json", "--status-after"}},
 		},
 		{
 			name:       "new stacked branch",
@@ -561,29 +651,18 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 			input:      "feature/child",
 			laneCursor: 1,
 			outputs: map[string][]byte{
-				"branch new --anchor feature/ui feature/child -j --status-after": wrapped,
+				"branch new --anchor feature/ui feature/child --json --status-after": wrapped,
 			},
-			want: [][]string{{"branch", "new", "--anchor", "feature/ui", "feature/child", "-j", "--status-after"}},
-		},
-		{
-			name:          "stage current change",
-			id:            actionStage,
-			input:         "feature/ui",
-			laneCursor:    1,
-			contentCursor: 0,
-			outputs: map[string][]byte{
-				"stage ae:sv feature/ui -j --status-after": wrapped,
-			},
-			want: [][]string{{"stage", "ae:sv", "feature/ui", "-j", "--status-after"}},
+			want: [][]string{{"branch", "new", "--anchor", "feature/ui", "feature/child", "--json", "--status-after"}},
 		},
 		{
 			name:       "unapply applied branch",
 			id:         actionApplyToggle,
 			laneCursor: 1,
 			outputs: map[string][]byte{
-				"unapply feature/ui -j --status-after": wrapped,
+				"unapply feature/ui --json --status-after": wrapped,
 			},
-			want: [][]string{{"unapply", "feature/ui", "-j", "--status-after"}},
+			want: [][]string{{"unapply", "feature/ui", "--json", "--status-after"}},
 		},
 		{
 			name:          "commit current change",
@@ -592,9 +671,9 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 			laneCursor:    1,
 			contentCursor: 0,
 			outputs: map[string][]byte{
-				"commit feature/ui -m commit msg --changes ae:sv -j --status-after": wrapped,
+				"commit -b feature/ui -m commit msg ae:sv --json --status-after": wrapped,
 			},
-			want: [][]string{{"commit", "feature/ui", "-m", "commit msg", "--changes", "ae:sv", "-j", "--status-after"}},
+			want: [][]string{{"commit", "-b", "feature/ui", "-m", "commit msg", "ae:sv", "--json", "--status-after"}},
 		},
 		{
 			name:       "rename branch",
@@ -602,19 +681,18 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 			input:      "feature/renamed",
 			laneCursor: 1,
 			outputs: map[string][]byte{
-				"reword ma -m feature/renamed -j --status-after": wrapped,
+				"reword ma -m feature/renamed --json --status-after": wrapped,
 			},
-			want: [][]string{{"reword", "ma", "-m", "feature/renamed", "-j", "--status-after"}},
+			want: [][]string{{"reword", "ma", "-m", "feature/renamed", "--json", "--status-after"}},
 		},
 		{
 			name:       "delete branch",
 			id:         actionDelete,
 			laneCursor: 1,
 			outputs: map[string][]byte{
-				"branch delete feature/ui": []byte("deleted"),
-				"status -j":                statusRaw,
+				"discard feature/ui --json --status-after": wrapped,
 			},
-			want: [][]string{{"branch", "delete", "feature/ui"}, {"status", "-j"}},
+			want: [][]string{{"discard", "feature/ui", "--json", "--status-after"}},
 		},
 		{
 			name:          "discard change",
@@ -622,9 +700,9 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 			laneCursor:    1,
 			contentCursor: 0,
 			outputs: map[string][]byte{
-				"discard ae:sv -j --status-after": wrapped,
+				"discard ae:sv --json --status-after": wrapped,
 			},
-			want: [][]string{{"discard", "ae:sv", "-j", "--status-after"}},
+			want: [][]string{{"discard", "ae:sv", "--json", "--status-after"}},
 		},
 		{
 			name:          "amend change",
@@ -633,28 +711,29 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 			laneCursor:    1,
 			contentCursor: 0,
 			outputs: map[string][]byte{
-				"amend ae:sv c1 -j --status-after": wrapped,
+				"amend -t c1 ae:sv --json --status-after": wrapped,
 			},
-			want: [][]string{{"amend", "ae:sv", "c1", "-j", "--status-after"}},
+			want: [][]string{{"amend", "-t", "c1", "ae:sv", "--json", "--status-after"}},
 		},
 		{
 			name:       "absorb",
 			id:         actionAbsorb,
 			laneCursor: 1,
 			outputs: map[string][]byte{
-				"absorb -j --status-after": wrapped,
+				"absorb --json --status-after": wrapped,
 			},
-			want: [][]string{{"absorb", "-j", "--status-after"}},
+			want: [][]string{{"absorb", "--json", "--status-after"}},
 		},
 		{
 			name:          "squash current commit",
 			id:            actionSquash,
+			input:         "c2",
 			laneCursor:    1,
 			contentCursor: 1,
 			outputs: map[string][]byte{
-				"squash c1 -j --status-after": wrapped,
+				"squash c1 -t c2 --use-target-message --json --status-after": wrapped,
 			},
-			want: [][]string{{"squash", "c1", "-j", "--status-after"}},
+			want: [][]string{{"squash", "c1", "-t", "c2", "--use-target-message", "--json", "--status-after"}},
 		},
 		{
 			name:          "uncommit",
@@ -662,40 +741,41 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 			laneCursor:    1,
 			contentCursor: 1,
 			outputs: map[string][]byte{
-				"uncommit c1 -j --status-after": wrapped,
+				"uncommit c1 --json --status-after": wrapped,
 			},
-			want: [][]string{{"uncommit", "c1", "-j", "--status-after"}},
+			want: [][]string{{"uncommit", "c1", "--json", "--status-after"}},
 		},
 		{
 			name:          "move commit",
 			id:            actionMove,
 			input:         "feature/target",
+			focus:         panelContents,
 			laneCursor:    1,
 			contentCursor: 1,
 			outputs: map[string][]byte{
-				"move c1 feature/target -j --status-after": wrapped,
+				"move c1 -b feature/target --json --status-after": wrapped,
 			},
-			want: [][]string{{"move", "c1", "feature/target", "-j", "--status-after"}},
+			want: [][]string{{"move", "c1", "-b", "feature/target", "--json", "--status-after"}},
 		},
 		{
-			name:          "rub commit",
-			id:            actionRub,
+			name:          "unstack branch",
+			id:            actionMove,
 			input:         "zz",
 			laneCursor:    1,
-			contentCursor: 1,
+			contentCursor: 0,
 			outputs: map[string][]byte{
-				"rub c1 zz -j --status-after": wrapped,
+				"move ma --unstack --json --status-after": wrapped,
 			},
-			want: [][]string{{"rub", "c1", "zz", "-j", "--status-after"}},
+			want: [][]string{{"move", "ma", "--unstack", "--json", "--status-after"}},
 		},
 		{
-			name:       "merge",
-			id:         actionMerge,
+			name:       "land",
+			id:         actionLand,
 			laneCursor: 1,
 			outputs: map[string][]byte{
-				"merge feature/ui -j --status-after": wrapped,
+				"land feature/ui --yes --json --status-after": wrapped,
 			},
-			want: [][]string{{"merge", "feature/ui", "-j", "--status-after"}},
+			want: [][]string{{"land", "feature/ui", "--yes", "--json", "--status-after"}},
 		},
 		{
 			name: "pull check",
@@ -709,9 +789,9 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 			name: "pull",
 			id:   actionPull,
 			outputs: map[string][]byte{
-				"pull -j --status-after": wrapped,
+				"pull --json --status-after": wrapped,
 			},
-			want: [][]string{{"pull", "-j", "--status-after"}},
+			want: [][]string{{"pull", "--json", "--status-after"}},
 		},
 		{
 			name:       "push",
@@ -719,9 +799,9 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 			laneCursor: 1,
 			outputs: map[string][]byte{
 				"push feature/ui": []byte("pushed"),
-				"status -j":       statusRaw,
+				"status --json":   statusRaw,
 			},
-			want: [][]string{{"push", "feature/ui"}, {"status", "-j"}},
+			want: [][]string{{"push", "feature/ui"}, {"status", "--json"}},
 		},
 		{
 			name:       "push dry-run",
@@ -738,9 +818,9 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 			laneCursor: 1,
 			outputs: map[string][]byte{
 				"push feature/ui --with-force": []byte("pushed"),
-				"status -j":                    statusRaw,
+				"status --json":                statusRaw,
 			},
-			want: [][]string{{"push", "feature/ui", "--with-force"}, {"status", "-j"}},
+			want: [][]string{{"push", "feature/ui", "--with-force"}, {"status", "--json"}},
 		},
 		{
 			name:       "new pr",
@@ -765,18 +845,18 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 			id:         actionPRDraft,
 			laneCursor: 1,
 			outputs: map[string][]byte{
-				"pr set-draft feature/ui -j --status-after": wrapped,
+				"pr set-draft feature/ui --json --status-after": wrapped,
 			},
-			want: [][]string{{"pr", "set-draft", "feature/ui", "-j", "--status-after"}},
+			want: [][]string{{"pr", "set-draft", "feature/ui", "--json", "--status-after"}},
 		},
 		{
 			name:       "set pr ready",
 			id:         actionPRReady,
 			laneCursor: 1,
 			outputs: map[string][]byte{
-				"pr set-ready feature/ui -j --status-after": wrapped,
+				"pr set-ready feature/ui --json --status-after": wrapped,
 			},
-			want: [][]string{{"pr", "set-ready", "feature/ui", "-j", "--status-after"}},
+			want: [][]string{{"pr", "set-ready", "feature/ui", "--json", "--status-after"}},
 		},
 		{
 			name: "resolve status",
@@ -791,26 +871,26 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 			id:         actionResolveFinish,
 			laneCursor: 1,
 			outputs: map[string][]byte{
-				"resolve finish -j --status-after": wrapped,
+				"resolve finish --json --status-after": wrapped,
 			},
-			want: [][]string{{"resolve", "finish", "-j", "--status-after"}},
+			want: [][]string{{"resolve", "finish", "--json", "--status-after"}},
 		},
 		{
 			name:       "resolve cancel",
 			id:         actionResolveCancel,
 			laneCursor: 1,
 			outputs: map[string][]byte{
-				"resolve cancel -j --status-after": wrapped,
+				"resolve cancel --json --status-after": wrapped,
 			},
-			want: [][]string{{"resolve", "cancel", "-j", "--status-after"}},
+			want: [][]string{{"resolve", "cancel", "--json", "--status-after"}},
 		},
 		{
 			name: "undo",
 			id:   actionUndo,
 			outputs: map[string][]byte{
-				"undo -j --status-after": wrapped,
+				"undo --json --status-after": wrapped,
 			},
-			want: [][]string{{"undo", "-j", "--status-after"}},
+			want: [][]string{{"undo", "--json", "--status-after"}},
 		},
 		{
 			name:       "snapshot",
@@ -827,9 +907,9 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 			id:    actionRestore,
 			input: "snap",
 			outputs: map[string][]byte{
-				"oplog restore snap --force -j --status-after": wrapped,
+				"oplog restore snap --json --status-after": wrapped,
 			},
-			want: [][]string{{"oplog", "restore", "snap", "--force", "-j", "--status-after"}},
+			want: [][]string{{"oplog", "restore", "snap", "--json", "--status-after"}},
 		},
 		{
 			name: "clean dry-run",
@@ -843,9 +923,9 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 			name: "clean",
 			id:   actionClean,
 			outputs: map[string][]byte{
-				"clean -j --status-after": wrapped,
+				"clean --json --status-after": wrapped,
 			},
-			want: [][]string{{"clean", "-j", "--status-after"}},
+			want: [][]string{{"clean", "--json", "--status-after"}},
 		},
 	}
 
@@ -854,6 +934,7 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 			runner := &actionRunner{outputs: tc.outputs}
 			model := newModel(gitbutler.NewClient(".", runner))
 			model.data = buildWorkspaceData(loadFixtureStatus(t), loadFixtureBranches(t))
+			model.focus = tc.focus
 			model.laneCursor = tc.laneCursor
 			model.contentCursor = tc.contentCursor
 
@@ -1088,7 +1169,7 @@ func TestUpdateFromUpstreamRefreshesBeforeSayingNoUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &actionRunner{outputs: map[string][]byte{
-		"status -j": statusRaw,
+		"status --json": statusRaw,
 	}}
 	model = newModel(gitbutler.NewClient(".", runner))
 	model.data = buildWorkspaceData(status, loadFixtureBranches(t))
@@ -1133,9 +1214,9 @@ func TestUpdateFromUpstreamOpensConfirmForMergedBranchCleanup(t *testing.T) {
 func TestPullCleansMergedBranchWithoutIncomingTargetCommits(t *testing.T) {
 	status := loadFixtureStatus(t)
 	markFixtureBranchMerged(status)
+	wrapped := wrapStatusAfter(t, status)
 	runner := &actionRunner{outputs: map[string][]byte{
-		"branch delete feature/ui": []byte("deleted"),
-		"status -j":                rawStatus(t, status),
+		"discard feature/ui --json --status-after": wrapped,
 	}}
 	model := newModel(gitbutler.NewClient(".", runner))
 	model.data = buildWorkspaceData(status, loadFixtureBranches(t))
@@ -1151,7 +1232,7 @@ func TestPullCleansMergedBranchWithoutIncomingTargetCommits(t *testing.T) {
 	if msg.err != nil {
 		t.Fatalf("cleanup failed: %v", msg.err)
 	}
-	want := [][]string{{"branch", "delete", "feature/ui"}, {"status", "-j"}}
+	want := [][]string{{"discard", "feature/ui", "--json", "--status-after"}}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
 	}
@@ -1165,9 +1246,8 @@ func TestPullUpdatesThenCleansMergedBranchWithIncomingTargetCommits(t *testing.T
 	status.UpstreamState.UpstreamCommits = []gitbutler.Commit{status.UpstreamState.LatestCommit}
 	wrapped := wrapStatusAfter(t, status)
 	runner := &actionRunner{outputs: map[string][]byte{
-		"pull -j --status-after":   wrapped,
-		"branch delete feature/ui": []byte("deleted"),
-		"status -j":                rawStatus(t, status),
+		"pull --json --status-after":               wrapped,
+		"discard feature/ui --json --status-after": wrapped,
 	}}
 	model := newModel(gitbutler.NewClient(".", runner))
 	model.data = buildWorkspaceData(status, loadFixtureBranches(t))
@@ -1184,9 +1264,8 @@ func TestPullUpdatesThenCleansMergedBranchWithIncomingTargetCommits(t *testing.T
 		t.Fatalf("update failed: %v", msg.err)
 	}
 	want := [][]string{
-		{"pull", "-j", "--status-after"},
-		{"branch", "delete", "feature/ui"},
-		{"status", "-j"},
+		{"pull", "--json", "--status-after"},
+		{"discard", "feature/ui", "--json", "--status-after"},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
@@ -1199,7 +1278,7 @@ func TestStartupRefreshMsgStartsInitialStatusLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &actionRunner{outputs: map[string][]byte{
-		"status -j": statusRaw,
+		"status --json": statusRaw,
 	}}
 	model := newModel(gitbutler.NewClient(".", runner))
 
@@ -1219,8 +1298,8 @@ func TestStartupRefreshMsgStartsInitialStatusLoad(t *testing.T) {
 	if full.err != nil || full.status == nil {
 		t.Fatalf("startup refresh failed: status nil=%v err=%v", full.status == nil, full.err)
 	}
-	if got := strings.Join(runner.calls[0], " "); got != "status -j" {
-		t.Fatalf("command = %q, want status -j", got)
+	if got := strings.Join(runner.calls[0], " "); got != "status --json" {
+		t.Fatalf("command = %q, want status --json", got)
 	}
 }
 
@@ -1240,7 +1319,7 @@ func TestFastStatusMsgDisplaysGitChangesWithoutSetupActions(t *testing.T) {
 		t.Fatalf("fast changes not visible: %#v", items)
 	}
 	actions := actionIDs(next.availableActions())
-	if actions[actionSetup] || actions[actionStage] {
+	if actions[actionSetup] || actions[actionCommit] {
 		t.Fatalf("fast status should not expose GitButler mutations: %#v", actions)
 	}
 }
@@ -1295,7 +1374,7 @@ func TestAutoRefreshStatusOnly(t *testing.T) {
 	}
 
 	runner := &actionRunner{outputs: map[string][]byte{
-		"status -j": statusRaw,
+		"status --json": statusRaw,
 	}}
 	model := newModel(gitbutler.NewClient(".", runner))
 	model.loading = false
@@ -1310,7 +1389,7 @@ func TestAutoRefreshStatusOnly(t *testing.T) {
 	if _, ok := cmd().(autoRefreshMsg); !ok {
 		t.Fatalf("unexpected message from auto refresh")
 	}
-	if !reflect.DeepEqual(runner.calls, [][]string{{"status", "-j"}}) {
+	if !reflect.DeepEqual(runner.calls, [][]string{{"status", "--json"}}) {
 		t.Fatalf("calls = %#v", runner.calls)
 	}
 
@@ -1321,8 +1400,8 @@ func TestAutoRefreshStatusOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner = &actionRunner{outputs: map[string][]byte{
-		"status -j":            statusRaw,
-		"branch list -j --all": branchesRaw,
+		"status --json":            statusRaw,
+		"branch list --json --all": branchesRaw,
 	}}
 	model = newModel(gitbutler.NewClient(".", runner))
 	model.loading = false
@@ -1338,7 +1417,7 @@ func TestAutoRefreshStatusOnly(t *testing.T) {
 	if msg.branches == nil {
 		t.Fatal("branch-including refresh should return a branch list")
 	}
-	if !reflect.DeepEqual(runner.calls, [][]string{{"status", "-j"}, {"branch", "list", "-j", "--all"}}) {
+	if !reflect.DeepEqual(runner.calls, [][]string{{"status", "--json"}, {"branch", "list", "--json", "--all"}}) {
 		t.Fatalf("calls = %#v", runner.calls)
 	}
 }

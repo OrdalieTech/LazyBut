@@ -91,12 +91,11 @@ func SnapshotMode(client *gitbutler.Client, width, height int, overlay string) s
 	case "branch":
 		model.mode = modeBranchPicker
 	case "picker":
-		// Synthesise a stage-to-branch picker for visual review.
 		model.mode = modeTargetPicker
 		items := model.branchItems()
 		model.targetPicker = targetPickerState{
-			Title:  "assign to branch",
-			Action: action{ID: actionStage, Label: "assign/stage change to branch"},
+			Title:  "move target",
+			Action: action{ID: actionMove, Label: "move selected commit"},
 			Items:  items,
 		}
 	case "loading":

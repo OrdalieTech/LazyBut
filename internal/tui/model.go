@@ -30,7 +30,7 @@ const (
 	modePalette
 	modeBranchPicker
 	modeHelp
-	modeTargetPicker // generic picker for actions that need to choose from a list (assign, move, etc.)
+	modeTargetPicker // generic picker for actions that need a branch or commit target
 	modeDiff         // full-screen diff view with line-level navigation
 )
 
@@ -57,7 +57,6 @@ const (
 	actionAddBranch        actionID = "add_branch"
 	actionNewBranch        actionID = "new_branch"
 	actionNewStacked       actionID = "new_stacked_branch"
-	actionStage            actionID = "stage"
 	actionApplyToggle      actionID = "apply_toggle"
 	actionCommit           actionID = "commit"
 	actionRename           actionID = "rename"
@@ -68,8 +67,7 @@ const (
 	actionSquash           actionID = "squash"
 	actionUncommit         actionID = "uncommit"
 	actionMove             actionID = "move"
-	actionRub              actionID = "rub"
-	actionMerge            actionID = "merge"
+	actionLand             actionID = "land"
 	actionPullCheck        actionID = "pull_check"
 	actionPull             actionID = "pull"
 	actionPush             actionID = "push"
@@ -99,6 +97,7 @@ type action struct {
 	InputLabel  string
 	ConfirmText string
 	Dangerous   bool
+	Target      string
 }
 
 type promptState struct {
@@ -168,40 +167,12 @@ type Model struct {
 	diffScroll int // scroll offset for the diff body
 }
 
-// targetPickerState backs modeTargetPicker — a generic "select one of these"
-// modal used by actions whose input is a branch/commit (assign, move, rub,
-// amend). Replaces a free-text prompt with an actual selector.
+// targetPickerState backs the generic branch/commit target picker.
 type targetPickerState struct {
-	Title    string
-	Action   action
-	Items    []pickerItem
-	Cursor   int
-	Multi    bool         // multi-select mode (space toggles)
-	Selected map[int]bool // set when Multi is true
-}
-
-func (t *targetPickerState) toggle(idx int) {
-	if t.Selected == nil {
-		t.Selected = map[int]bool{}
-	}
-	if t.Selected[idx] {
-		delete(t.Selected, idx)
-	} else {
-		t.Selected[idx] = true
-	}
-}
-
-func (t targetPickerState) selectedValues() []string {
-	if !t.Multi || len(t.Selected) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(t.Selected))
-	for idx := range t.Selected {
-		if idx >= 0 && idx < len(t.Items) {
-			out = append(out, t.Items[idx].Value)
-		}
-	}
-	return out
+	Title  string
+	Action action
+	Items  []pickerItem
+	Cursor int
 }
 
 type pickerItem struct {
@@ -881,12 +852,6 @@ func (m Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.move(-10)
 	}
 
-	if key.String() == "a" {
-		if item, ok := m.selectedContent(); ok && item.Kind == contentChange {
-			return m.startAction(m.actionByID(actionStage))
-		}
-	}
-
 	for _, action := range m.availableActions() {
 		if action.matches(key.String()) {
 			return m.startAction(action)
@@ -1151,29 +1116,21 @@ func (m Model) handleTargetPickerKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.targetPicker.Cursor = picker.Cursor - 1
 		}
 		return m, nil
-	case " ":
-		if picker.Multi && len(picker.Items) > 0 {
-			m.targetPicker.toggle(picker.Cursor)
-		}
-		return m, nil
 	case "enter":
 		if len(picker.Items) == 0 {
 			m.mode = modeNormal
 			return m, nil
 		}
 		action := picker.Action
-		var value string
-		if picker.Multi {
-			vals := m.targetPicker.selectedValues()
-			if len(vals) == 0 {
-				vals = []string{picker.Items[picker.Cursor].Value}
-			}
-			value = strings.Join(vals, " ")
-		} else {
-			value = picker.Items[picker.Cursor].Value
-		}
+		value := picker.Items[picker.Cursor].Value
 		m.mode = modeNormal
 		m.targetPicker = targetPickerState{}
+		if action.ID == actionCommit {
+			action.Target = value
+			m.prompt = promptState{Action: action}
+			m.mode = modeInput
+			return m, nil
+		}
 		if action.Dangerous || action.ConfirmText != "" {
 			m.confirm = confirmState{Action: action, Input: value}
 			m.mode = modeConfirm
@@ -1214,16 +1171,16 @@ func (m Model) handleTargetPickerMouse(mouse tea.MouseMsg) (tea.Model, tea.Cmd) 
 			m.targetPicker.Cursor = row
 		case tea.MouseActionPress:
 			m.targetPicker.Cursor = row
-			if picker.Multi {
-				// In multi-select, clicking toggles instead of confirming —
-				// the user finalises with Enter so they can pick several rows.
-				m.targetPicker.toggle(row)
-				return m, nil
-			}
 			action := picker.Action
 			value := picker.Items[row].Value
 			m.mode = modeNormal
 			m.targetPicker = targetPickerState{}
+			if action.ID == actionCommit {
+				action.Target = value
+				m.prompt = promptState{Action: action}
+				m.mode = modeInput
+				return m, nil
+			}
 			if action.Dangerous || action.ConfirmText != "" {
 				m.confirm = confirmState{Action: action, Input: value}
 				m.mode = modeConfirm
@@ -1400,24 +1357,23 @@ func (m Model) startAction(action action) (tea.Model, tea.Cmd) {
 // free-text prompt (e.g. commit messages, branch names — new info, not picks).
 func (m Model) pickerForAction(a action) (targetPickerState, bool) {
 	switch a.ID {
-	case actionStage:
+	case actionCommit:
+		if _, ok := m.commitBranch(); ok {
+			return targetPickerState{}, false
+		}
 		items := m.branchItems()
 		if len(items) == 0 {
 			return targetPickerState{}, false
 		}
-		return targetPickerState{Title: "assign to branch", Action: a, Items: items}, true
-	case actionMove, actionRub:
-		items := m.branchItems()
-		// move/rub can also target zz (unassigned).
-		items = append([]pickerItem{{Value: "zz", Label: "zz", Meta: "unassigned"}}, items...)
-		if len(items) == 1 {
+		return targetPickerState{Title: "commit to branch", Action: a, Items: items}, true
+	case actionMove:
+		item, hasItem := m.selectedContent()
+		moveCommit := m.focus != panelLanes && hasItem && item.Kind == contentCommit
+		items := m.moveTargetItems(moveCommit)
+		if len(items) == 0 {
 			return targetPickerState{}, false
 		}
-		title := "move target"
-		if a.ID == actionRub {
-			title = "rub into"
-		}
-		return targetPickerState{Title: title, Action: a, Items: items}, true
+		return targetPickerState{Title: "move target", Action: a, Items: items}, true
 	case actionAmend:
 		items := m.commitItems()
 		if len(items) == 0 {
@@ -1425,18 +1381,21 @@ func (m Model) pickerForAction(a action) (targetPickerState, bool) {
 		}
 		return targetPickerState{Title: "amend into commit", Action: a, Items: items}, true
 	case actionSquash:
-		items := m.commitItems()
-		if len(items) < 2 {
+		source, ok := m.selectedContent()
+		if !ok || source.Kind != contentCommit {
 			return targetPickerState{}, false
 		}
-		// Pre-select any commits the user already batch-selected via space.
-		preselected := map[int]bool{}
-		for idx, item := range items {
-			if m.selected[item.Value] {
-				preselected[idx] = true
+		items := m.commitItems()
+		targets := items[:0]
+		for _, item := range items {
+			if item.Value != source.ID {
+				targets = append(targets, item)
 			}
 		}
-		return targetPickerState{Title: "squash commits (space to toggle)", Action: a, Items: items, Multi: true, Selected: preselected}, true
+		if len(targets) == 0 {
+			return targetPickerState{}, false
+		}
+		return targetPickerState{Title: "squash into", Action: a, Items: targets}, true
 	}
 	return targetPickerState{}, false
 }
@@ -1484,6 +1443,45 @@ func (m Model) branchItems() []pickerItem {
 	return out
 }
 
+func (m Model) moveTargetItems(commit bool) []pickerItem {
+	lane, ok := m.selectedLane()
+	if !ok {
+		return nil
+	}
+	items := m.branchItems()
+	targets := make([]pickerItem, 0, len(items))
+	for _, target := range items {
+		if target.Value != lane.Name {
+			targets = append(targets, target)
+		}
+	}
+	if !commit && lane.Depth > 0 {
+		targets = append([]pickerItem{{Value: "zz", Label: "zz", Meta: "unstack"}}, targets...)
+	}
+	return targets
+}
+
+func (m Model) commitBranch() (string, bool) {
+	lane, ok := m.selectedLane()
+	if !ok {
+		return "", false
+	}
+	if lane.Kind == laneAppliedBranch {
+		return lane.Name, lane.Name != ""
+	}
+	var branch string
+	for _, candidate := range m.data.Lanes {
+		if candidate.Kind != laneAppliedBranch {
+			continue
+		}
+		if branch != "" {
+			return "", false
+		}
+		branch = candidate.Name
+	}
+	return branch, branch != ""
+}
+
 func pickerBranchMeta(lane lane) string {
 	parts := []string{}
 	if lane.CommitCount > 0 {
@@ -1498,7 +1496,7 @@ func pickerBranchMeta(lane lane) string {
 func (m Model) commitItems() []pickerItem {
 	out := []pickerItem{}
 	for _, item := range m.contents() {
-		if item.Kind != contentCommit && item.Kind != contentUpstreamCommit {
+		if item.Kind != contentCommit {
 			continue
 		}
 		out = append(out, pickerItem{Value: item.ID, Label: item.Label, Meta: item.ID})
@@ -1550,11 +1548,6 @@ func (m Model) execute(action action, input string) (tea.Model, tea.Cmd) {
 	if len(changeIDs) == 0 && hasContent && selectedContent.Kind == contentChange {
 		changeIDs = []string{selectedContent.ID}
 	}
-	commitIDs := m.selectedContentIDs(contentCommit)
-	if len(commitIDs) == 0 && hasContent && selectedContent.Kind == contentCommit {
-		commitIDs = []string{selectedContent.ID}
-	}
-
 	switch action.ID {
 	case actionAddBranch:
 		return m.openBranchPicker()
@@ -1579,17 +1572,21 @@ func (m Model) execute(action action, input string) (tea.Model, tea.Cmd) {
 		return m.startLoading("creating stacked branch"), m.mutationCmd("stacked branch created", func() (*gitbutler.WorkspaceStatus, error) {
 			return m.client.NewBranch(ctx, input, anchor)
 		})
-	case actionStage:
-		return m.startLoading("assigning change"), m.mutationCmd("change assigned", func() (*gitbutler.WorkspaceStatus, error) {
-			return m.client.StageMany(ctx, changeIDs, input)
-		})
 	case actionApplyToggle:
 		return m.startLoading("toggling branch"), m.mutationCmd("branch visibility changed", func() (*gitbutler.WorkspaceStatus, error) {
-			return m.client.Unapply(ctx, branchRef, false)
+			return m.client.Unapply(ctx, branchRef)
 		})
 	case actionCommit:
+		branch, ok := action.Target, action.Target != ""
+		if !ok {
+			branch, ok = m.commitBranch()
+		}
+		if !ok || len(changeIDs) == 0 {
+			m.setToast("select changes on a branch, or use zz with exactly one applied branch", toastError)
+			return m, nil
+		}
 		return m.startLoading("committing"), m.mutationCmd("committed", func() (*gitbutler.WorkspaceStatus, error) {
-			return m.client.Commit(ctx, branchRef, input, changeIDs, false)
+			return m.client.Commit(ctx, branch, input, changeIDs)
 		})
 	case actionRename:
 		return m.startLoading("renaming branch"), m.mutationCmd("renamed", func() (*gitbutler.WorkspaceStatus, error) {
@@ -1605,7 +1602,7 @@ func (m Model) execute(action action, input string) (tea.Model, tea.Cmd) {
 		})
 	case actionAmend:
 		return m.startLoading("amending"), m.mutationCmd("amended", func() (*gitbutler.WorkspaceStatus, error) {
-			return m.client.Amend(ctx, firstNonEmpty(first(changeIDs), selectedContent.ID), input)
+			return m.client.Amend(ctx, input, firstNonEmpty(first(changeIDs), selectedContent.ID))
 		})
 	case actionAbsorb:
 		return m.startLoading("absorbing"), m.mutationCmd("absorbed", func() (*gitbutler.WorkspaceStatus, error) {
@@ -1613,30 +1610,23 @@ func (m Model) execute(action action, input string) (tea.Model, tea.Cmd) {
 		})
 	case actionSquash:
 		return m.startLoading("squashing"), m.mutationCmd("squashed", func() (*gitbutler.WorkspaceStatus, error) {
-			targets := strings.Fields(input)
-			if len(targets) == 0 {
-				targets = commitIDs
-			}
-			return m.client.Squash(ctx, targets...)
+			return m.client.Squash(ctx, selectedContent.ID, input)
 		})
 	case actionUncommit:
 		target := firstNonEmpty(selectedContent.ID, selectedLane.ID, selectedLane.Name)
 		return m.startLoading("uncommitting"), m.mutationCmd("uncommitted", func() (*gitbutler.WorkspaceStatus, error) {
-			return m.client.Uncommit(ctx, target, false)
+			return m.client.Uncommit(ctx, target)
 		})
 	case actionMove:
-		source := firstNonEmpty(selectedContent.ID, selectedLane.ID, selectedLane.Name)
 		return m.startLoading("moving"), m.mutationCmd("moved", func() (*gitbutler.WorkspaceStatus, error) {
-			return m.client.Move(ctx, source, input)
+			if m.focus != panelLanes && hasContent && selectedContent.Kind == contentCommit {
+				return m.client.MoveCommit(ctx, selectedContent.ID, input)
+			}
+			return m.client.MoveBranch(ctx, firstNonEmpty(selectedLane.ID, selectedLane.Name), input)
 		})
-	case actionRub:
-		source := firstNonEmpty(selectedContent.ID, selectedLane.ID, selectedLane.Name)
-		return m.startLoading("rubbing"), m.mutationCmd("rubbed", func() (*gitbutler.WorkspaceStatus, error) {
-			return m.client.Rub(ctx, source, input)
-		})
-	case actionMerge:
-		return m.startLoading("merging"), m.mutationCmd("merged", func() (*gitbutler.WorkspaceStatus, error) {
-			return m.client.Merge(ctx, branchRef)
+	case actionLand:
+		return m.startLoading("landing"), m.mutationCmd("landed", func() (*gitbutler.WorkspaceStatus, error) {
+			return m.client.Land(ctx, branchRef)
 		})
 	case actionPullCheck:
 		summary := m.upstreamUpdateSummary()
@@ -2086,7 +2076,7 @@ func (m Model) hasUpstreamWork() bool {
 func (m Model) mergedUpstreamBranchLanes() []lane {
 	out := []lane{}
 	for _, lane := range m.data.Lanes {
-		if lane.Kind == laneAppliedBranch && branchMergedUpstream(lane) {
+		if lane.Kind == laneAppliedBranch && lane.ChangeCount == 0 && branchMergedUpstream(lane) {
 			out = append(out, lane)
 		}
 	}
@@ -2453,12 +2443,10 @@ func (m Model) handleDiffKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.diffCursor = max(0, m.diffCursor-5)
 	case "ctrl+d":
 		m.diffCursor = min(len(lines)-1, m.diffCursor+5)
-	case "m", "a", "enter":
-		// Stage the file to a branch — same as the normal-mode assign action.
-		// Only meaningful for file changes; commits are view-only here.
+	case "c":
 		if item, ok := m.selectedContent(); ok && item.Kind == contentChange {
 			m.mode = modeNormal
-			return m.startAction(m.actionByID(actionStage))
+			return m.startAction(m.actionByID(actionCommit))
 		}
 	case "d":
 		// Discard the file change.

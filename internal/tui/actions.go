@@ -8,7 +8,7 @@ func (m Model) availableActions() []action {
 	isBranch := hasLane && lane.Kind == laneAppliedBranch
 	isAppliedBranch := hasLane && lane.Kind == laneAppliedBranch
 	isChange := hasItem && item.Kind == contentChange && item.ID != ""
-	isCommit := hasItem && (item.Kind == contentCommit || item.Kind == contentUpstreamCommit) && item.ID != ""
+	isCommit := hasItem && item.Kind == contentCommit && item.ID != ""
 
 	if m.data.Status == nil {
 		actions := []action{
@@ -62,16 +62,16 @@ func (m Model) availableActions() []action {
 			action{ID: actionPRDraft, Key: "T", Label: "set PR draft", ConfirmText: "Mark the selected branch review as draft?"},
 			action{ID: actionPRReady, Key: "W", Label: "set PR ready", ConfirmText: "Mark the selected branch review as ready?"},
 			action{ID: actionCopyPRURL, Key: "ctrl+o", Label: "copy PR URL"},
-			action{ID: actionMerge, Key: "ctrl+m", Label: "merge branch into target", ConfirmText: "Merge selected branch into the target branch?"},
+			action{ID: actionLand, Key: "ctrl+m", Label: "land branch into target", ConfirmText: "Land selected branch into the target with `but land --yes`?"},
 			action{ID: actionDelete, Key: "D", Label: "delete branch", Dangerous: true, ConfirmText: "Delete this branch?"},
-			action{ID: actionMove, Key: "M", Label: "move selected branch/commit", InputLabel: "target branch, commit, or zz"},
-			action{ID: actionRub, Key: "b", Label: "rub selected item into target", InputLabel: "target branch, commit, or zz"},
 		)
+		if m.focus == panelLanes && len(m.moveTargetItems(false)) > 0 {
+			actions = append(actions, action{ID: actionMove, Key: "M", Label: "stack or unstack selected branch", InputLabel: "target branch or zz"})
+		}
 	}
 
 	if isAppliedBranch {
 		actions = append(actions,
-			action{ID: actionCommit, Key: "c", Label: "commit branch changes", InputLabel: "commit message"},
 			action{ID: actionAbsorb, Key: "ctrl+a", Label: "absorb changes into commits", ConfirmText: "Run `but absorb`?"},
 			action{ID: actionSnapshot, Key: "s", Label: "oplog snapshot", InputLabel: "snapshot message"},
 			action{ID: actionRestore, Key: "S", Label: "restore oplog snapshot", Dangerous: true, ConfirmText: "Restore this snapshot? Uncommitted changes will be replaced."},
@@ -82,19 +82,24 @@ func (m Model) availableActions() []action {
 
 	if isChange {
 		actions = append(actions,
-			action{ID: actionStage, Key: "m", Aliases: []string{"a"}, Label: "assign/stage change to branch", InputLabel: "target branch"},
 			action{ID: actionDiscard, Key: "d", Aliases: []string{"X"}, Label: "discard selected change", Dangerous: true, ConfirmText: "Discard the selected file or hunk?"},
 			action{ID: actionAmend, Key: "A", Aliases: []string{"i"}, Label: "amend change into commit", InputLabel: "target commit id"},
 		)
+		if _, ok := m.commitBranch(); ok || len(m.branchItems()) > 0 {
+			actions = append(actions, action{ID: actionCommit, Key: "c", Label: "commit selected change(s)", InputLabel: "commit message"})
+		}
 	}
 
 	if isCommit {
 		actions = append(actions,
 			action{ID: actionUncommit, Key: "U", Label: "uncommit selected commit", Dangerous: true, ConfirmText: "Move the selected commit back to unassigned changes?"},
-			action{ID: actionSquash, Key: "Q", Label: "squash commits", ConfirmText: "Squash these commits? This rewrites history."},
-			action{ID: actionMove, Key: "M", Label: "move selected commit", InputLabel: "target branch or commit"},
-			action{ID: actionRub, Key: "b", Label: "rub selected commit", InputLabel: "target branch, commit, or zz"},
 		)
+		if m.focus != panelLanes && len(m.moveTargetItems(true)) > 0 {
+			actions = append(actions, action{ID: actionMove, Key: "M", Label: "move selected commit", InputLabel: "target branch"})
+		}
+		if len(m.commitItems()) > 1 {
+			actions = append(actions, action{ID: actionSquash, Key: "Q", Label: "squash commit into target", ConfirmText: "Squash the selected commit into this target? This rewrites history."})
+		}
 	}
 
 	return dedupeActions(actions)

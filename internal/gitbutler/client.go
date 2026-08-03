@@ -86,7 +86,7 @@ func (c *Client) ForgeAuthCommand(ctx context.Context) *exec.Cmd {
 
 func (c *Client) Status(ctx context.Context) (*WorkspaceStatus, error) {
 	var status WorkspaceStatus
-	if err := c.runJSON(ctx, &status, "status", "-j"); err != nil {
+	if err := c.runJSON(ctx, &status, "status", "--json"); err != nil {
 		return nil, err
 	}
 	c.enrichStatusWithGitHubPRs(ctx, &status)
@@ -129,7 +129,7 @@ func (c *Client) GitDiff(ctx context.Context, path string) (string, error) {
 
 func (c *Client) BranchList(ctx context.Context) (*BranchList, error) {
 	var branches BranchList
-	if err := c.runJSON(ctx, &branches, "branch", "list", "-j", "--all"); err != nil {
+	if err := c.runJSON(ctx, &branches, "branch", "list", "--json", "--all"); err != nil {
 		return nil, err
 	}
 	c.enrichBranchListWithGitHubPRs(ctx, &branches)
@@ -303,38 +303,12 @@ func (c *Client) Diff(ctx context.Context, target string) (string, error) {
 	return c.runText(ctx, "diff", target, "--no-tui")
 }
 
-func (c *Client) Stage(ctx context.Context, changeID, branch string) (*WorkspaceStatus, error) {
-	return c.mutate(ctx, "stage", changeID, branch)
-}
-
-func (c *Client) StageMany(ctx context.Context, changeIDs []string, branch string) (*WorkspaceStatus, error) {
-	var status *WorkspaceStatus
-	for _, id := range changeIDs {
-		if id == "" {
-			continue
-		}
-		next, err := c.Stage(ctx, id, branch)
-		if err != nil {
-			return status, err
-		}
-		status = next
-	}
-	if status != nil {
-		return status, nil
-	}
-	return c.Status(ctx)
-}
-
 func (c *Client) Apply(ctx context.Context, branch string) (*WorkspaceStatus, error) {
 	return c.mutate(ctx, "apply", branch)
 }
 
-func (c *Client) Unapply(ctx context.Context, branch string, force bool) (*WorkspaceStatus, error) {
-	args := []string{"unapply", branch}
-	if force {
-		args = append(args, "--force")
-	}
-	return c.mutate(ctx, args...)
+func (c *Client) Unapply(ctx context.Context, branch string) (*WorkspaceStatus, error) {
+	return c.mutate(ctx, "unapply", branch)
 }
 
 func (c *Client) NewBranch(ctx context.Context, name string, anchor string) (*WorkspaceStatus, error) {
@@ -347,63 +321,61 @@ func (c *Client) NewBranch(ctx context.Context, name string, anchor string) (*Wo
 }
 
 func (c *Client) DeleteBranch(ctx context.Context, branch string) (*WorkspaceStatus, error) {
-	if _, err := c.runText(ctx, "branch", "delete", branch); err != nil {
-		return nil, err
-	}
-	return c.Status(ctx)
+	return c.mutate(ctx, "discard", branch)
 }
 
 func (c *Client) Reword(ctx context.Context, target, message string) (*WorkspaceStatus, error) {
 	return c.mutate(ctx, "reword", target, "-m", message)
 }
 
-func (c *Client) Commit(ctx context.Context, branch, message string, changeIDs []string, only bool) (*WorkspaceStatus, error) {
-	args := []string{"commit", branch, "-m", message}
-	if only {
-		args = append(args, "--only")
-	}
+func (c *Client) Commit(ctx context.Context, branch, message string, changeIDs []string) (*WorkspaceStatus, error) {
+	args := []string{"commit", "-b", branch, "-m", message}
+	hasChange := false
 	for _, id := range changeIDs {
 		if id != "" {
-			args = append(args, "--changes", id)
+			args = append(args, id)
+			hasChange = true
 		}
+	}
+	if !hasChange {
+		return nil, errors.New("refusing to commit without selected change IDs")
 	}
 	return c.mutate(ctx, args...)
 }
 
-func (c *Client) Amend(ctx context.Context, changeID, commitID string) (*WorkspaceStatus, error) {
-	return c.mutate(ctx, "amend", changeID, commitID)
+func (c *Client) Amend(ctx context.Context, target, source string) (*WorkspaceStatus, error) {
+	return c.mutate(ctx, "amend", "-t", target, source)
 }
 
 func (c *Client) Absorb(ctx context.Context) (*WorkspaceStatus, error) {
 	return c.mutate(ctx, "absorb")
 }
 
-func (c *Client) Squash(ctx context.Context, targets ...string) (*WorkspaceStatus, error) {
-	return c.mutate(ctx, append([]string{"squash"}, targets...)...)
+func (c *Client) Squash(ctx context.Context, source, target string) (*WorkspaceStatus, error) {
+	return c.mutate(ctx, "squash", source, "-t", target, "--use-target-message")
 }
 
-func (c *Client) Uncommit(ctx context.Context, target string, discard bool) (*WorkspaceStatus, error) {
-	args := []string{"uncommit", target}
-	if discard {
-		args = append(args, "--discard")
+func (c *Client) Uncommit(ctx context.Context, target string) (*WorkspaceStatus, error) {
+	return c.mutate(ctx, "uncommit", target)
+}
+
+func (c *Client) MoveCommit(ctx context.Context, source, branch string) (*WorkspaceStatus, error) {
+	return c.mutate(ctx, "move", source, "-b", branch)
+}
+
+func (c *Client) MoveBranch(ctx context.Context, source, target string) (*WorkspaceStatus, error) {
+	if target == "zz" {
+		return c.mutate(ctx, "move", source, "--unstack")
 	}
-	return c.mutate(ctx, args...)
-}
-
-func (c *Client) Move(ctx context.Context, source, target string) (*WorkspaceStatus, error) {
-	return c.mutate(ctx, "move", source, target)
-}
-
-func (c *Client) Rub(ctx context.Context, source, target string) (*WorkspaceStatus, error) {
-	return c.mutate(ctx, "rub", source, target)
+	return c.mutate(ctx, "move", source, "--above", target)
 }
 
 func (c *Client) Pull(ctx context.Context) (*WorkspaceStatus, error) {
 	return c.mutate(ctx, "pull")
 }
 
-func (c *Client) Merge(ctx context.Context, branch string) (*WorkspaceStatus, error) {
-	return c.mutate(ctx, "merge", branch)
+func (c *Client) Land(ctx context.Context, branch string) (*WorkspaceStatus, error) {
+	return c.mutate(ctx, "land", branch, "--yes")
 }
 
 func (c *Client) PullCheck(ctx context.Context) (string, error) {
@@ -465,14 +437,14 @@ func (c *Client) OplogSnapshot(ctx context.Context, message string) (string, err
 // snapshot restore picker.
 func (c *Client) OplogList(ctx context.Context) ([]OplogEntry, error) {
 	var entries []OplogEntry
-	if err := c.runJSON(ctx, &entries, "oplog", "list", "-j"); err != nil {
+	if err := c.runJSON(ctx, &entries, "oplog", "list", "--json"); err != nil {
 		return nil, err
 	}
 	return entries, nil
 }
 
 func (c *Client) OplogRestore(ctx context.Context, snapshot string) (*WorkspaceStatus, error) {
-	return c.mutate(ctx, "oplog", "restore", snapshot, "--force")
+	return c.mutate(ctx, "oplog", "restore", snapshot)
 }
 
 func (c *Client) CleanDryRun(ctx context.Context) (string, error) {
@@ -489,10 +461,6 @@ func (c *Client) Discard(ctx context.Context, target string) (*WorkspaceStatus, 
 
 func (c *Client) runJSON(ctx context.Context, out any, args ...string) error {
 	raw, err := c.runner().Run(ctx, c.Dir, args...)
-	if err != nil && needsFormatJSONFallback(raw, args) {
-		args = formatJSONArgs(args)
-		raw, err = c.runner().Run(ctx, c.Dir, args...)
-	}
 	if err != nil {
 		return parseCommandError(raw, err)
 	}
@@ -539,7 +507,7 @@ func (c *Client) runGit(ctx context.Context, args ...string) ([]byte, error) {
 }
 
 func (c *Client) mutate(ctx context.Context, args ...string) (*WorkspaceStatus, error) {
-	args = append(append([]string{}, args...), "-j", "--status-after")
+	args = append(append([]string{}, args...), "--json", "--status-after")
 	var wrapped StatusAfter
 	if err := c.runJSON(ctx, &wrapped, args...); err != nil {
 		return nil, err
@@ -596,37 +564,7 @@ func parseCommandError(raw []byte, runErr error) error {
 	if text == "" {
 		return runErr
 	}
-	if isUnsupportedJSONFlagError(text) {
-		return fmt.Errorf("GitButler CLI is too old for LazyBut: %s. Update `but` with `curl -fsSL https://gitbutler.com/install.sh | sh`, or pass --but-bin to a newer GitButler CLI", firstNonEmptyLine(text))
-	}
 	return fmt.Errorf("%s: %s", runErr, text)
-}
-
-func isUnsupportedJSONFlagError(text string) bool {
-	lower := strings.ToLower(text)
-	return strings.Contains(lower, "unexpected argument '-j'") ||
-		strings.Contains(lower, "unexpected argument \"-j\"")
-}
-
-func needsFormatJSONFallback(raw []byte, args []string) bool {
-	for _, arg := range args {
-		if arg == "-j" {
-			return isUnsupportedJSONFlagError(string(raw))
-		}
-	}
-	return false
-}
-
-func formatJSONArgs(args []string) []string {
-	next := make([]string, 0, len(args)+1)
-	for _, arg := range args {
-		if arg == "-j" {
-			next = append(next, "--format", "json")
-			continue
-		}
-		next = append(next, arg)
-	}
-	return next
 }
 
 func parseGitChanges(raw []byte) []FileChange {

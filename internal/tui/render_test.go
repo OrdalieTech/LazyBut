@@ -344,10 +344,10 @@ func TestOverlaysStayWithinTerminalGeometry(t *testing.T) {
 			model.mode = mode
 			model.palette = model.availableActions()
 			model.confirm = confirmState{Action: action{Label: "destructive", ConfirmText: "Really?", Dangerous: true}}
-			model.prompt = promptState{Action: action{Label: "stage", InputLabel: "target branch"}, Value: "feature/x"}
+			model.prompt = promptState{Action: action{Label: "commit", InputLabel: "commit message"}, Value: "selected changes"}
 			model.targetPicker = targetPickerState{
-				Title:  "assign to branch",
-				Action: action{ID: actionStage},
+				Title:  "move target",
+				Action: action{ID: actionMove},
 				Items:  []pickerItem{{Value: "a", Label: "feature/a", Meta: "3c"}, {Value: "b", Label: "feature/b", Meta: "1c"}},
 			}
 			view := model.View()
@@ -356,7 +356,7 @@ func TestOverlaysStayWithinTerminalGeometry(t *testing.T) {
 	}
 }
 
-func TestStageActionUsesPicker(t *testing.T) {
+func TestCommitActionUsesMessagePrompt(t *testing.T) {
 	model := newModel(gitbutler.NewClient(".", nil))
 	model.data = buildWorkspaceData(loadFixtureStatus(t), loadFixtureBranches(t))
 	model.loading = false
@@ -365,20 +365,20 @@ func TestStageActionUsesPicker(t *testing.T) {
 	model.laneCursor = 0 // zz so a change is selected
 	model.contentCursor = 0
 
-	stage := model.actionByID(actionStage)
-	if stage.ID != actionStage {
-		t.Fatalf("stage action not available: %#v", stage)
+	commit := model.actionByID(actionCommit)
+	if commit.ID != actionCommit {
+		t.Fatalf("commit action not available: %#v", commit)
 	}
-	updated, _ := model.startAction(stage)
+	updated, _ := model.startAction(commit)
 	m, ok := updated.(Model)
 	if !ok {
 		t.Fatalf("startAction did not return Model")
 	}
-	if m.mode != modeTargetPicker {
-		t.Fatalf("stage should open the target picker, got mode %d", m.mode)
+	if m.mode != modeInput {
+		t.Fatalf("commit should open the message prompt, got mode %d", m.mode)
 	}
-	if len(m.targetPicker.Items) == 0 {
-		t.Fatalf("target picker should be populated with applied branches")
+	if m.prompt.Action.ID != actionCommit {
+		t.Fatalf("prompt action = %q, want commit", m.prompt.Action.ID)
 	}
 }
 
@@ -474,6 +474,36 @@ func TestSyncChipShapes(t *testing.T) {
 				t.Fatalf("syncChip(%+v) = %q, expected fragment %q", c.lane, got, c.expect)
 			}
 		})
+	}
+}
+
+func TestOpenReviewOverridesIntegratedBranchStatus(t *testing.T) {
+	lane := lane{
+		Kind:        laneAppliedBranch,
+		PushStatus:  "integrated",
+		ReviewID:    "815",
+		ReviewState: "OPEN",
+	}
+
+	if branchMergedUpstream(lane) {
+		t.Fatal("open review must not be treated as merged")
+	}
+	if got := syncChip(lane); !strings.Contains(got, glyphCheck) || strings.Contains(got, "merged") {
+		t.Fatalf("open integrated review should render as synced, got %q", got)
+	}
+}
+
+func TestMergedBranchWithAssignedChangesIsNotCleaned(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	model.data.Lanes = []lane{{
+		Kind:        laneAppliedBranch,
+		Name:        "feature/ui",
+		PushStatus:  "integrated",
+		ChangeCount: 1,
+	}}
+
+	if got := model.mergedUpstreamBranchNames(); len(got) != 0 {
+		t.Fatalf("merged branch with assigned changes should not be cleaned: %#v", got)
 	}
 }
 
@@ -665,6 +695,7 @@ func TestUpstreamConfirmShowsMergedBranchCleanup(t *testing.T) {
 	status.UpstreamState.Behind = 0
 	status.UpstreamState.LatestCommit = status.MergeBase
 	status.UpstreamState.UpstreamCommits = nil
+	status.Stacks[0].AssignedChanges = nil
 	state := "MERGED"
 	status.Stacks[0].Branches[0].ReviewState = &state
 	status.Stacks[0].Branches[0].BranchStatus = gitbutler.StatusText("nothingToPush")

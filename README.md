@@ -24,7 +24,7 @@ GitButler behavior to the official `but` CLI instead of reimplementing Git logic
 
 ## Requirements
 
-- GitButler CLI available as `but` (the installer can install it for you)
+- GitButler CLI 0.22 or newer available as `but` (the installer can install it for you)
 - A Git repository; LazyBut can offer to run `but setup` on first start
 - A terminal with color support; mouse support is optional but enabled when available
 - Go 1.26+ only if building from source
@@ -113,10 +113,11 @@ go run ./cmd/lazybut -C /path/to/gitbutler/repo -snapshot 120x36
 - `r`: refresh
 - `+` / `B`: add an inactive branch to the workspace
 - `n`: create branch
-- `m` / `a`: assign a change to a branch
-- `c`: commit selected branch changes
+- `c`: commit the selected change(s)
 - `A`: amend selected change into a commit
 - `Q`: squash commits
+- `M`: move a commit, or stack/unstack the selected branch
+- `ctrl+m`: land the selected branch directly on the target
 - `d`: discard selected change
 - `D`: delete selected branch
 - `P`: push selected branch
@@ -139,7 +140,7 @@ LazyBut models GitButler desktop's "Update workspace" flow for the terminal:
 - If the target branch has incoming commits or a PR-merged branch can be cleaned, it opens a navigable update modal.
 - `u` remains available for a non-mutating check before running the update.
 - `y` / `enter` runs `but pull`, which fetches the target branch and rebases/restacks applied branches.
-- When the modal lists merged branch cleanups, `y` / `enter` also deletes those local branches with `but branch delete`.
+- When the modal lists merged branch cleanups, `y` / `enter` also removes those local branches with the undoable `but discard` operation.
 - Conflicts reported by GitButler are surfaced in the TUI.
 
 ## Architecture
@@ -161,7 +162,7 @@ go run ./cmd/lazybut -C /path/to/repo -snapshot 96x32
 go run ./cmd/lazybut -C /path/to/repo -snapshot 60x24
 ```
 
-`scripts/e2e-local.sh` builds `lazybut`, creates disposable repositories under `/private/tmp`, exercises GitButler setup, responsive snapshots, branch/stack creation, assign, commit, push dry-run, push, pull check, pull, undo, oplog snapshot, clean, local merge, missing `but`, then tears the repositories down.
+`scripts/e2e-local.sh` builds `lazybut`, creates disposable repositories under the system temporary directory, exercises GitButler setup, responsive snapshots, selected-change commits, branch stacks, history edits, push dry-run, push, pull check, pull, undo, oplog snapshot, clean, local land, and the missing-`but` error, then tears the repositories down.
 
 For the real GitHub path, run:
 
