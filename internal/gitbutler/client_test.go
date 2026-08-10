@@ -6,19 +6,35 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 type fakeRunner struct {
 	outputs map[string][]byte
 	errs    map[string]error
-	calls   [][]string
+	gate    chan struct{} // when non-nil, Run blocks until the channel is closed
+
+	mu    sync.Mutex
+	calls [][]string
 }
 
 func (r *fakeRunner) Run(_ context.Context, _ string, args ...string) ([]byte, error) {
+	if r.gate != nil {
+		<-r.gate
+	}
+	r.mu.Lock()
 	r.calls = append(r.calls, append([]string{}, args...))
+	r.mu.Unlock()
 	key := strings.Join(args, " ")
 	return r.outputs[key], r.errs[key]
+}
+
+func (r *fakeRunner) callCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.calls)
 }
 
 func TestClientBinAndForgeAuthCommand(t *testing.T) {
@@ -133,6 +149,125 @@ func TestClientBranchListReconcilesStaleGitHubPR(t *testing.T) {
 	reviews := branches.AppliedStacks[0].Heads[0].Reviews
 	if len(reviews) != 1 || reviews[0].Number != 781 || reviews[0].URL != "https://github.com/OrdalieTech/Ordalie-back/pull/781" || reviews[0].State != "MERGED" || reviews[0].MergedAt == "" {
 		t.Fatalf("reviews = %#v", reviews)
+	}
+}
+
+const testGHPRListKey = "pr list --state all --json number,url,headRefName,state,mergedAt --limit 1000"
+
+func testGitHubEnrichableStatusJSON() []byte {
+	return []byte(`{
+		"unassignedChanges": [],
+		"stacks": [{
+			"cliId": "s1",
+			"assignedChanges": [],
+			"branches": [{
+				"cliId": "b1",
+				"name": "glose-os-poc",
+				"commits": [],
+				"upstreamCommits": [],
+				"branchStatus": "nothingToPush",
+				"mergeStatus": "clean"
+			}]
+		}],
+		"mergeBase": {},
+		"upstreamState": {}
+	}`)
+}
+
+func waitForGitHubRefresh(t *testing.T, c *Client) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		c.githubMu.Lock()
+		done := !c.githubRefreshInFlight
+		c.githubMu.Unlock()
+		if done {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("github refresh did not finish")
+}
+
+func TestClientGitHubPRStaleCacheRefreshesInBackground(t *testing.T) {
+	butRunner := &fakeRunner{outputs: map[string][]byte{"status --json": testGitHubEnrichableStatusJSON()}}
+	gate := make(chan struct{})
+	ghRunner := &fakeRunner{
+		gate: gate,
+		outputs: map[string][]byte{
+			testGHPRListKey: []byte(`[{"number":781,"url":"https://github.com/OrdalieTech/Ordalie-back/pull/781","headRefName":"glose-os-poc","state":"MERGED","mergedAt":"2026-07-08T13:08:08Z"}]`),
+		},
+	}
+	client := NewClient(".", butRunner)
+	client.GHRunner = ghRunner
+	client.githubPRs = map[string]Review{"glose-os-poc": {Number: 700, URL: "https://github.com/OrdalieTech/Ordalie-back/pull/700", State: "OPEN"}}
+	client.githubPRsExpiresAt = time.Now().Add(-time.Second)
+
+	// Expired cache: both calls serve the stale PR immediately even though the
+	// gh runner is still blocked, and the refresh is single-flighted.
+	for i := 0; i < 2; i++ {
+		status, err := client.Status(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		branch := status.Stacks[0].Branches[0]
+		if branch.ReviewID == nil || *branch.ReviewID != "700" {
+			t.Fatalf("call %d review id = %#v, want stale 700", i, branch.ReviewID)
+		}
+	}
+	close(gate)
+	waitForGitHubRefresh(t, client)
+	if got := ghRunner.callCount(); got != 1 {
+		t.Fatalf("gh calls = %d, want single-flighted refresh", got)
+	}
+
+	status, err := client.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	branch := status.Stacks[0].Branches[0]
+	if branch.ReviewID == nil || *branch.ReviewID != "781" {
+		t.Fatalf("review id = %#v, want refreshed 781", branch.ReviewID)
+	}
+	if got := ghRunner.callCount(); got != 1 {
+		t.Fatalf("gh calls = %d, want cached result", got)
+	}
+}
+
+func TestClientGitHubPRBackgroundRefreshErrorSetsBackoff(t *testing.T) {
+	butRunner := &fakeRunner{outputs: map[string][]byte{"status --json": testGitHubEnrichableStatusJSON()}}
+	ghRunner := &fakeRunner{errs: map[string]error{testGHPRListKey: errors.New("exit status 1")}}
+	client := NewClient(".", butRunner)
+	client.GHRunner = ghRunner
+	client.githubPRs = map[string]Review{"glose-os-poc": {Number: 700, URL: "https://github.com/OrdalieTech/Ordalie-back/pull/700", State: "OPEN"}}
+	client.githubPRsExpiresAt = time.Now().Add(-time.Second)
+
+	status, err := client.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	branch := status.Stacks[0].Branches[0]
+	if branch.ReviewID == nil || *branch.ReviewID != "700" {
+		t.Fatalf("review id = %#v, want stale 700", branch.ReviewID)
+	}
+	waitForGitHubRefresh(t, client)
+	client.githubMu.Lock()
+	backoffActive := time.Now().Before(client.githubPRErrorBackoff)
+	client.githubMu.Unlock()
+	if !backoffActive {
+		t.Fatal("expected error backoff after failed background refresh")
+	}
+
+	status, err = client.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	branch = status.Stacks[0].Branches[0]
+	if branch.ReviewID == nil || *branch.ReviewID != "700" {
+		t.Fatalf("review id during backoff = %#v, want stale 700", branch.ReviewID)
+	}
+	if got := ghRunner.callCount(); got != 1 {
+		t.Fatalf("gh calls = %d, want no refresh during backoff", got)
 	}
 }
 

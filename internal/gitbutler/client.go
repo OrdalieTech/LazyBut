@@ -42,10 +42,11 @@ type Client struct {
 	Runner   Runner
 	GHRunner Runner
 
-	githubMu             sync.Mutex
-	githubPRs            map[string]Review
-	githubPRsExpiresAt   time.Time
-	githubPRErrorBackoff time.Time
+	githubMu              sync.Mutex
+	githubPRs             map[string]Review
+	githubPRsExpiresAt    time.Time
+	githubPRErrorBackoff  time.Time
+	githubRefreshInFlight bool
 }
 
 const (
@@ -234,12 +235,37 @@ func (c *Client) githubPullRequests(ctx context.Context) map[string]Review {
 		c.githubMu.Unlock()
 		return prs
 	}
+	if c.githubPRs != nil {
+		// Stale-while-revalidate: serve the expired cache immediately and
+		// refresh once in the background, so only the first fill ever blocks
+		// Status/BranchList on `gh pr list`.
+		prs := cloneReviewMap(c.githubPRs)
+		if !now.Before(c.githubPRErrorBackoff) && !c.githubRefreshInFlight {
+			c.githubRefreshInFlight = true
+			go func() {
+				defer func() {
+					c.githubMu.Lock()
+					c.githubRefreshInFlight = false
+					c.githubMu.Unlock()
+				}()
+				// The caller's ctx is cancelled once its Status/BranchList
+				// returns, so the refresh must run on its own context.
+				c.fetchGitHubPullRequests(context.Background())
+			}()
+		}
+		c.githubMu.Unlock()
+		return prs
+	}
 	if now.Before(c.githubPRErrorBackoff) {
 		c.githubMu.Unlock()
 		return nil
 	}
 	c.githubMu.Unlock()
 
+	return c.fetchGitHubPullRequests(ctx)
+}
+
+func (c *Client) fetchGitHubPullRequests(ctx context.Context) map[string]Review {
 	ghCtx, cancel := context.WithTimeout(ctx, githubPRTimeout)
 	defer cancel()
 	var raw []githubPullRequest

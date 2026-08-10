@@ -78,6 +78,10 @@ type workspaceData struct {
 	FastChanges   []gitbutler.FileChange
 	Lanes         []lane
 	BranchOptions []branchOption
+	// Contents caches the derived per-lane content (parallel to Lanes). The
+	// render path asks for lane contents many times per frame; workspaceData is
+	// only rebuilt on data refresh, so the cache needs no invalidation.
+	Contents [][]contentItem
 }
 
 func buildWorkspaceData(status *gitbutler.WorkspaceStatus, branches *gitbutler.BranchList) workspaceData {
@@ -188,11 +192,12 @@ func buildWorkspaceData(status *gitbutler.WorkspaceStatus, branches *gitbutler.B
 	}
 
 	data.BranchOptions = buildBranchOptions(branches, applied)
+	data.buildContents()
 	return data
 }
 
 func buildFastWorkspaceData(changes []gitbutler.FileChange) workspaceData {
-	return workspaceData{
+	data := workspaceData{
 		Fast:        true,
 		FastChanges: changes,
 		Lanes: []lane{{
@@ -203,6 +208,15 @@ func buildFastWorkspaceData(changes []gitbutler.FileChange) workspaceData {
 			Applied:     true,
 			ChangeCount: len(changes),
 		}},
+	}
+	data.buildContents()
+	return data
+}
+
+func (d *workspaceData) buildContents() {
+	d.Contents = make([][]contentItem, len(d.Lanes))
+	for i := range d.Lanes {
+		d.Contents[i] = d.contentFor(i)
 	}
 }
 
@@ -231,6 +245,15 @@ func buildBranchOptions(branches *gitbutler.BranchList, applied map[string]bool)
 }
 
 func (d workspaceData) ContentFor(index int) []contentItem {
+	if index < 0 || index >= len(d.Contents) {
+		return nil
+	}
+	return d.Contents[index]
+}
+
+// contentFor computes a lane's content from scratch; use ContentFor, which
+// serves the per-refresh cache built by buildContents.
+func (d workspaceData) contentFor(index int) []contentItem {
 	if len(d.Lanes) == 0 || index < 0 || index >= len(d.Lanes) {
 		return nil
 	}
@@ -320,13 +343,6 @@ func changesToContent(changes []gitbutler.FileChange) []contentItem {
 		})
 	}
 	return items
-}
-
-func valueOrZero(value *int) int {
-	if value == nil {
-		return 0
-	}
-	return *value
 }
 
 func firstNonEmpty(values ...string) string {
