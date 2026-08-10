@@ -69,9 +69,12 @@ lazybut update -ref latest
 lazybut update -ref v0.1.8
 ```
 
-`lazybut update` installs `github.com/OrdalieTech/LazyBut/cmd/lazybut@latest`
-into the directory that contains the current `lazybut` binary. It requires Go.
-Use `-ref v0.1.8` to pin a specific tagged release.
+`lazybut update` downloads the release binary for your platform — the same
+assets `install.sh` uses, no Go toolchain needed — and swaps it in over the
+current `lazybut` binary. Use `-ref v0.1.8` to install a specific tagged
+release, `-install-dir DIR` to install somewhere other than the directory of
+the current binary, and `-dry-run` to print what would be downloaded without
+installing.
 
 ## Run
 
@@ -109,6 +112,9 @@ go run ./cmd/lazybut -C /path/to/gitbutler/repo -snapshot 120x36
 - Uses confirmation prompts for destructive or high-impact actions.
 
 ## Key Actions
+
+`?` opens an in-app help overlay with the full keymap, and `:` opens the action
+palette listing every action available in the current context. Highlights:
 
 - `r`: refresh
 - `+` / `B`: add an inactive branch to the workspace

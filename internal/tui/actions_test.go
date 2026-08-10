@@ -468,6 +468,7 @@ func TestKanbanHeaderCueDoesNotOffsetMouseHitRows(t *testing.T) {
 		FilePath: "internal/tui/second.go",
 	})
 	model.data.Lanes[0].ChangeCount++
+	model.data.buildContents()
 	model.laneCursor = 1
 	model.contentCursor = 0
 	model.focus = panelLanes

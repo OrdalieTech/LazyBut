@@ -28,7 +28,7 @@ const defaultUpdateRef = "latest"
 var version string
 
 func main() {
-	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "--version") {
+	if len(os.Args) > 1 && isVersionArg(os.Args[1]) {
 		fmt.Println("lazybut " + versionString())
 		return
 	}
@@ -48,6 +48,13 @@ func main() {
 	noAutoRefresh := flag.Bool("no-auto-refresh", false, "disable background GitButler status refresh")
 	snapshot := flag.String("snapshot", "", "render one non-interactive frame, formatted as WIDTHxHEIGHT")
 	overlay := flag.String("snapshot-overlay", "", "overlay to render in snapshot mode: help, confirm, prompt, palette, branch")
+	flag.Usage = func() {
+		fmt.Fprint(flag.CommandLine.Output(), "Usage: lazybut [flags]\n"+
+			"       lazybut version\n"+
+			"       lazybut update [-ref TAG] [-install-dir DIR] [-dry-run]\n\n"+
+			"Flags:\n")
+		flag.PrintDefaults()
+	}
 	flag.Parse()
 
 	client := gitbutler.NewClient(*dir, gitbutler.ExecRunner{Bin: *bin})
@@ -65,6 +72,14 @@ func main() {
 		fmt.Fprintf(os.Stderr, "lazybut: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func isVersionArg(arg string) bool {
+	switch arg {
+	case "version", "--version", "-version", "-v":
+		return true
+	}
+	return false
 }
 
 // runSelfUpdate downloads the release binary for this platform — the same

@@ -41,6 +41,13 @@ const (
 	statusRefreshTimeout      = 90 * time.Second
 	branchListTimeout         = 2 * time.Minute
 	autoRefreshTimeout        = 45 * time.Second
+	// previewDebounce is how long navigation must rest on a row before its
+	// diff/show subprocess spawns — holding j/k coalesces to one subprocess
+	// for the resting row instead of one per traversed row.
+	previewDebounce = 100 * time.Millisecond
+	// ciTickInterval paces the tick loop when only the pending-CI chip needs
+	// animation (see slowTickCmd).
+	ciTickInterval = 500 * time.Millisecond
 	// branchRefreshEvery is how many 3s status cycles pass between branch-list
 	// reloads (~30s). The branch list carries PR reviews, ahead counts, and
 	// merge-clean flags — without periodic reloads those go permanently stale.
@@ -139,10 +146,16 @@ type Model struct {
 	previewRowsReady bool
 	previewRowsDiff  bool
 	previewExpanded  bool // = toggles: preview takes ~60% of the body instead of a strip
-	selected         map[string]bool
-	rangeAnchor      int
-	spinnerFrame     int
-	ticking          bool
+	// previewSeq guards the navigation debounce: each cursor move bumps it, so
+	// only the tick from the resting row still matches and spawns a subprocess.
+	previewSeq int
+	// previewCache holds diff/show bodies by target so revisited rows render
+	// instantly with zero subprocesses. Cleared whenever workspace data changes.
+	previewCache map[string]string
+	selected     map[string]bool
+	rangeAnchor  int
+	spinnerFrame int
+	ticking      bool
 
 	autoRefreshInFlight        bool
 	autoRefreshPending         bool
@@ -163,8 +176,9 @@ type Model struct {
 	targetPicker targetPickerState
 
 	// diffState backs modeDiff — a full-screen diff view.
-	diffCursor int // cursor row in the diff body
-	diffScroll int // scroll offset for the diff body
+	diffCursor  int  // cursor row in the diff body
+	diffScroll  int  // scroll offset for the diff body
+	diffPending bool // enter-to-inspect pressed while the diff was still loading
 }
 
 // targetPickerState backs the generic branch/commit target picker.
@@ -239,6 +253,14 @@ type textMsg struct {
 	target string
 	body   string
 	err    error
+	seq    int
+}
+
+// previewDebounceMsg fires after previewDebounce of navigation quiet; a stale
+// seq or target means the cursor moved on and no subprocess should spawn.
+type previewDebounceMsg struct {
+	seq    int
+	target string
 }
 
 type installGitButlerMsg struct {
@@ -350,6 +372,15 @@ func tickCmd() tea.Cmd {
 	})
 }
 
+// slowTickCmd drives the pending-CI chip when nothing else animates: CI runs
+// last minutes, so ticking at 90ms for the whole run would burn ~11 full
+// re-renders/sec on an otherwise idle app.
+func slowTickCmd() tea.Cmd {
+	return tea.Tick(ciTickInterval, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
+}
+
 func autoRefreshTickCmd() tea.Cmd {
 	return tea.Tick(autoStatusRefreshInterval, func(t time.Time) tea.Msg {
 		return autoRefreshTickMsg{}
@@ -364,7 +395,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	model, cmd := m.update(msg)
 	if next, ok := model.(Model); ok && !next.ticking && next.needsTick() {
 		next.ticking = true
-		return next, tea.Batch(cmd, tickCmd())
+		restart := tickCmd()
+		if !next.needsFastTick() {
+			restart = slowTickCmd()
+		}
+		return next, tea.Batch(cmd, restart)
 	}
 	return model, cmd
 }
@@ -373,12 +408,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // timed expiry: loading spinners, background sync, toast fade, the input caret,
 // the preview "loading diff…" spinner, or a pending-CI footer chip.
 func (m Model) needsTick() bool {
+	return m.needsFastTick() || m.needsSlowTick()
+}
+
+// needsFastTick covers animations that must run at the 90ms UI cadence.
+func (m Model) needsFastTick() bool {
 	if m.loading || m.autoRefreshInFlight || m.toast != "" || m.mode == modeInput {
 		return true
 	}
-	if m.previewTarget != "" && m.preview == "" && m.previewErr == nil {
-		return true
-	}
+	return m.previewTarget != "" && m.preview == "" && m.previewErr == nil
+}
+
+// needsSlowTick reports whether the pending-CI chip is the only reason to keep
+// animating — it advances at ciTickInterval instead of pinning the 90ms loop
+// for the length of a CI run.
+func (m Model) needsSlowTick() bool {
 	for _, lane := range m.data.Lanes {
 		if lane.CIPresent && lane.CIConclusion == "pending" {
 			return true
@@ -400,6 +444,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.data = buildFastWorkspaceData(msg.changes)
+		m.previewCache = nil
+		m.previewSeq++
+		m.setPreview("", "", nil)
 		m.clampCursors()
 		return m.withPreview()
 	case loadedMsg:
@@ -412,13 +459,13 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if isBootstrapError(msg.err) {
 			return m.maybePromptForBootstrap(msg.err), nil
 		}
-		m.setToast(msg.err.Error(), toastError)
+		m.setToast(humanizeCLIError(msg.err), toastError)
 		return m.maybePromptForBootstrap(msg.err), nil
 	case upstreamRefreshMsg:
 		m = m.stopLoading()
 		m.err = msg.err
 		if msg.err != nil {
-			m.setToast(msg.err.Error(), toastError)
+			m.setToast(humanizeCLIError(msg.err), toastError)
 			return m, nil
 		}
 		m = m.replaceData(msg.status, msg.branches)
@@ -446,7 +493,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case branchListMsg:
 		m = m.stopLoading()
 		if msg.err != nil {
-			m.setToast("branch list: "+msg.err.Error(), toastError)
+			m.setToast("branch list: "+humanizeCLIError(msg.err), toastError)
 			return m, nil
 		}
 		m = m.replaceData(m.data.Status, msg.branches)
@@ -477,11 +524,14 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.toast != "" && !m.toastExpires.IsZero() && time.Now().After(m.toastExpires) {
 			m.toast = ""
 		}
-		if !m.needsTick() {
-			m.ticking = false
-			return m, nil
+		if m.needsFastTick() {
+			return m, tickCmd()
 		}
-		return m, tickCmd()
+		if m.needsSlowTick() {
+			return m, slowTickCmd()
+		}
+		m.ticking = false
+		return m, nil
 	case autoRefreshTickMsg:
 		m.autoRefreshCycle++
 		// Reload the branch list on the first cycle after startup (it is never
@@ -510,7 +560,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, previewCmd)
 		}
 		if msg.err != nil {
-			m.setToast("background refresh: "+msg.err.Error(), toastError)
+			m.setToast("background refresh: "+humanizeCLIError(msg.err), toastError)
 			m.autoRefreshPending = false
 			m.autoRefreshPendingBranches = false
 			return m, tea.Batch(cmds...)
@@ -544,14 +594,40 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if msg.seq != m.previewSeq {
+			return m, nil
+		}
+		if msg.err == nil {
+			// Cache even when the cursor already moved on — coming back to
+			// this row then renders instantly without a subprocess.
+			if m.previewCache == nil {
+				m.previewCache = map[string]string{}
+			}
+			m.previewCache[msg.target] = msg.body
+		}
 		if msg.target == m.previewTarget {
 			m.setPreview(msg.target, msg.body, msg.err)
+			// Honor a pending enter-to-inspect now that the diff arrived.
+			if m.diffPending {
+				m.diffPending = false
+				if msg.err == nil && msg.body != "" && m.mode == modeNormal {
+					m.toast = ""
+					m.mode = modeDiff
+					m.diffCursor = 0
+					m.diffScroll = 0
+				}
+			}
 		}
 		return m, nil
+	case previewDebounceMsg:
+		if msg.seq != m.previewSeq || msg.target != m.previewTarget {
+			return m, nil
+		}
+		return m, m.previewCmdFor(msg.target)
 	case oplogLoadedMsg:
 		m = m.stopLoading()
 		if msg.err != nil {
-			m.setToast(msg.err.Error(), toastError)
+			m.setToast(humanizeCLIError(msg.err), toastError)
 			return m, nil
 		}
 		items := make([]pickerItem, 0, len(msg.entries))
@@ -716,7 +792,7 @@ func (m Model) clickKanban(x, y int) (tea.Model, tea.Cmd) {
 	m.contentCursor = max(0, y-4)
 	m.focus = panelContents
 	m.clampCursors()
-	return m.withPreview()
+	return m.withPreviewNav()
 }
 
 func (m Model) clickList(x, y int) (tea.Model, tea.Cmd) {
@@ -734,7 +810,7 @@ func (m Model) clickList(x, y int) (tea.Model, tea.Cmd) {
 		m.laneCursor = row
 	}
 	m.clampCursors()
-	return m.withPreview()
+	return m.withPreviewNav()
 }
 
 func (m Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -786,6 +862,7 @@ func (m Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.toast = ""
 		m.filter = ""
+		m.diffPending = false
 		m.selected = map[string]bool{}
 		m.rangeAnchor = -1
 		m.clampCursors()
@@ -883,12 +960,26 @@ func (m Model) handleInputKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.execute(action, input)
 	case tea.KeyBackspace, tea.KeyCtrlH:
-		if len(m.prompt.Value) > 0 {
-			m.prompt.Value = m.prompt.Value[:len(m.prompt.Value)-1]
+		// Delete the last rune, not the last byte — a byte-based cut leaves a
+		// dangling UTF-8 prefix behind multibyte characters like é or emoji.
+		if r := []rune(m.prompt.Value); len(r) > 0 {
+			m.prompt.Value = string(r[:len(r)-1])
 		}
+	case tea.KeyCtrlW:
+		// Delete the trailing word (readline convention).
+		trimmed := strings.TrimRight(m.prompt.Value, " ")
+		if idx := strings.LastIndex(trimmed, " "); idx >= 0 {
+			m.prompt.Value = trimmed[:idx+1]
+		} else {
+			m.prompt.Value = ""
+		}
+	case tea.KeySpace:
+		// Bubble Tea delivers a lone space as KeySpace, not KeyRunes — without
+		// this case every prompt silently drops spaces ("fix bug" → "fixbug").
+		m.prompt.Value += " "
 	default:
 		if key.Type == tea.KeyRunes {
-			m.prompt.Value += key.String()
+			m.prompt.Value += string(key.Runes)
 		}
 	}
 	return m, nil
@@ -1158,7 +1249,7 @@ func (m Model) handleTargetPickerMouse(mouse tea.MouseMsg) (tea.Model, tea.Cmd) 
 		}
 		return m, nil
 	case tea.MouseButtonLeft:
-		row, ok := paletteRowAt(m.height, len(picker.Items), mouse.Y)
+		row, ok := paletteRowAt(m.height, len(picker.Items), picker.Cursor, mouse.Y)
 		if !ok {
 			if mouse.Action == tea.MouseActionPress {
 				m.mode = modeNormal
@@ -1214,7 +1305,7 @@ func (m Model) handlePaletteMouse(mouse tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	row, ok := paletteRowAt(m.height, len(m.palette), mouse.Y)
+	row, ok := paletteRowAt(m.height, len(m.palette), m.paletteCursor, mouse.Y)
 	if !ok {
 		// Click outside the palette closes it.
 		if mouse.Button == tea.MouseButtonLeft && mouse.Action == tea.MouseActionPress {
@@ -1239,25 +1330,36 @@ func (m Model) handlePaletteMouse(mouse tea.MouseMsg) (tea.Model, tea.Cmd) {
 }
 
 // paletteRowAt translates a viewport y-coordinate to an item index within the
-// rendered palette, returning false when the y is outside the palette body.
-func paletteRowAt(totalHeight, itemCount, y int) (int, bool) {
+// rendered palette (or target picker), accounting for the cursor-centred row
+// window. Returns false when the y is outside the modal body.
+func paletteRowAt(totalHeight, itemCount, cursor, y int) (int, bool) {
 	// modal layout (renderPalette): header (1) + blank (1) + body lines (n)
 	// + blank (1) + footer (1) — wrapped by styleOverlay border + padding.
 	// styleOverlay.Padding(1, 2): adds 1 row top/bottom, border adds 2.
 	// Total internal vertical: 2 border + 2 padding + 1 header + 1 blank +
-	// itemCount + 1 blank + 1 footer = 8 + itemCount rows.
-	modalH := 8 + itemCount
+	// visible + 1 blank + 1 footer = 8 + visible rows.
+	height := paletteWindowHeight(totalHeight)
+	visible := min(itemCount, height)
+	modalH := 8 + visible
 	if modalH > totalHeight {
 		modalH = totalHeight
 	}
 	startY := max(0, (totalHeight-modalH)/2)
 	// First item row sits below: startY + border(1) + pad(1) + header(1) + blank(1) = startY + 4
 	firstItem := startY + 4
-	idx := y - firstItem
-	if idx < 0 || idx >= itemCount {
+	rowInView := y - firstItem
+	if rowInView < 0 || rowInView >= visible {
 		return 0, false
 	}
-	return idx, true
+	return windowStart(itemCount, cursor, height) + rowInView, true
+}
+
+// paletteWindowHeight is how many rows the palette/target-picker modals show.
+// Unlike the branch picker there is no low cap — tall terminals keep every
+// action visible at a glance; short ones window around the cursor instead of
+// letting overlay() hard-truncate the bottom of the list.
+func paletteWindowHeight(height int) int {
+	return max(4, height-10)
 }
 
 func (m Model) handleBranchPickerMouse(mouse tea.MouseMsg) (tea.Model, tea.Cmd) {
@@ -1739,14 +1841,13 @@ func (m Model) move(delta int) (tea.Model, tea.Cmd) {
 	case panelContents:
 		m.contentCursor += delta
 	case panelPreview:
-		m.previewScroll += delta
-		if m.previewScroll < 0 {
-			m.previewScroll = 0
-		}
-		return m, nil
+		// scrollPreview clamps against the preview's total row count, so
+		// scroll-up responds immediately instead of unwinding phantom
+		// over-scroll accumulated past the end of the diff.
+		return m.scrollPreview(delta), nil
 	}
 	m.clampCursors()
-	return m.withPreview()
+	return m.withPreviewNav()
 }
 
 func (m Model) moveLane(delta int) (tea.Model, tea.Cmd) {
@@ -1756,14 +1857,14 @@ func (m Model) moveLane(delta int) (tea.Model, tea.Cmd) {
 	m.selected = map[string]bool{}
 	m.rangeAnchor = -1
 	m.clampCursors()
-	return m.withPreview()
+	return m.withPreviewNav()
 }
 
 func (m Model) moveKanbanItem(delta int) (tea.Model, tea.Cmd) {
 	m.contentCursor += delta
 	m.focus = panelContents
 	m.clampCursors()
-	return m.withPreview()
+	return m.withPreviewNav()
 }
 
 func (m Model) toggleSelection() (tea.Model, tea.Cmd) {
@@ -1971,10 +2072,38 @@ func (m Model) withPreview() (Model, tea.Cmd) {
 	}
 	m.setPreview(target, "", nil)
 	m.previewScroll = 0
+	m.previewSeq++
 	return m, m.previewCmdFor(target)
 }
 
+// withPreviewNav is withPreview for cursor navigation: cache hits render
+// immediately with zero subprocesses, misses wait out previewDebounce first.
+// Data-arrival handlers keep calling withPreview so fresh data previews load
+// without the debounce delay.
+func (m Model) withPreviewNav() (Model, tea.Cmd) {
+	target := m.previewSelectionTarget()
+	if target == "" || target == m.previewTarget {
+		return m.withPreview()
+	}
+	if body, ok := m.previewCache[target]; ok {
+		m.setPreview(target, body, nil)
+		m.previewScroll = 0
+		return m, nil
+	}
+	m.setPreview(target, "", nil)
+	m.previewScroll = 0
+	m.previewSeq++
+	seq := m.previewSeq
+	return m, tea.Tick(previewDebounce, func(time.Time) tea.Msg {
+		return previewDebounceMsg{seq: seq, target: target}
+	})
+}
+
 func (m *Model) setPreview(target, body string, err error) {
+	// Moving to a different target abandons any pending enter-to-inspect.
+	if target != m.previewTarget {
+		m.diffPending = false
+	}
 	m.previewTarget = target
 	m.preview = body
 	m.previewErr = err
@@ -1989,6 +2118,7 @@ func (m *Model) setPreview(target, body string, err error) {
 
 func (m Model) previewCmdFor(target string) tea.Cmd {
 	client := m.client
+	seq := m.previewSeq
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
@@ -2001,7 +2131,7 @@ func (m Model) previewCmdFor(target string) tea.Cmd {
 		} else {
 			body, err = client.Diff(ctx, target)
 		}
-		return textMsg{target: target, body: body, err: err}
+		return textMsg{target: target, body: body, err: err, seq: seq}
 	}
 }
 
@@ -2259,6 +2389,10 @@ func (m Model) replaceData(status *gitbutler.WorkspaceStatus, branches *gitbutle
 		contentID = item.ID
 	}
 	m.data = buildWorkspaceData(status, branches)
+	// New workspace data invalidates every cached diff/show body.
+	m.previewCache = nil
+	m.previewSeq++
+	m.setPreview("", "", nil)
 	m.restoreCursors(laneKey, contentID)
 	return m
 }
@@ -2314,7 +2448,12 @@ func (m *Model) setToast(text string, kind toastKind) {
 	}
 	m.toast = text
 	m.toastKind = kind
-	m.toastExpires = time.Now().Add(4 * time.Second)
+	// Errors need reading time; info/success just confirm a keypress.
+	ttl := 4 * time.Second
+	if kind == toastError {
+		ttl = 10 * time.Second
+	}
+	m.toastExpires = time.Now().Add(ttl)
 }
 
 func (m *Model) clampCursors() {
@@ -2400,7 +2539,14 @@ func (m Model) selectedContent() (contentItem, bool) {
 // The diff content must already be loaded in m.preview (via withPreview).
 func (m Model) enterDiffMode() (tea.Model, tea.Cmd) {
 	if m.preview == "" {
-		m.setToast("loading diff — try again in a moment", toastInfo)
+		// The diff subprocess is still in flight — remember the intent and
+		// open the view when its textMsg lands instead of bouncing the key.
+		if m.previewTarget != "" && m.previewErr == nil {
+			m.diffPending = true
+			m.setToast("loading diff…", toastInfo)
+			return m, nil
+		}
+		m.setToast("nothing to inspect here", toastInfo)
 		return m, nil
 	}
 	m.mode = modeDiff

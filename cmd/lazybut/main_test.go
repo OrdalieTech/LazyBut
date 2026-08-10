@@ -29,6 +29,19 @@ func TestParseSizeRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+func TestIsVersionArg(t *testing.T) {
+	for _, arg := range []string{"version", "--version", "-version", "-v"} {
+		if !isVersionArg(arg) {
+			t.Fatalf("expected %q to be a version arg", arg)
+		}
+	}
+	for _, arg := range []string{"update", "-C", "", "-verbose"} {
+		if isVersionArg(arg) {
+			t.Fatalf("expected %q not to be a version arg", arg)
+		}
+	}
+}
+
 func TestResolveUpdateTagPassesThroughExplicitTags(t *testing.T) {
 	tag, err := resolveUpdateTag("v0.1.21")
 	if err != nil {

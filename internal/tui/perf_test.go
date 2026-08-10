@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/OrdalieTech/LazyBut/internal/gitbutler"
 )
 
 // The UI tick must stop when nothing animates and restart when something does —
@@ -28,6 +31,27 @@ func TestTickStopsWhenIdleAndRestartsOnActivity(t *testing.T) {
 	}
 	if !model.(Model).ticking {
 		t.Fatalf("ticking should be true while a toast is visible")
+	}
+}
+
+// The kanban must stay O(visible) per frame: styling all 2,000 rows before
+// windowing cost ~14ms/frame and ~11MB of garbage per frame on big repos.
+func BenchmarkViewLargeWorkspace(b *testing.B) {
+	status := &gitbutler.WorkspaceStatus{}
+	for i := 0; i < 2000; i++ {
+		status.UnassignedChanges = append(status.UnassignedChanges, gitbutler.FileChange{
+			CLIID:    fmt.Sprintf("c%d", i),
+			FilePath: fmt.Sprintf("internal/pkg%d/file%d.go", i%40, i),
+		})
+	}
+	m := newModel(nil)
+	m.loading = false
+	m.width = 200
+	m.height = 50
+	m.data = buildWorkspaceData(status, nil)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m.View()
 	}
 }
 

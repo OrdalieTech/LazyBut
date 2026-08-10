@@ -141,6 +141,11 @@ func (m Model) View() string {
 	if m.width == 0 {
 		return "loading lazybut..."
 	}
+	// Diff mode is full-screen and never composites over the workspace —
+	// bail out before paying for a board render that would be discarded.
+	if m.mode == modeDiff {
+		return m.renderDiffView()
+	}
 
 	top := m.renderTop()
 	hotbar := m.renderHotbar()
@@ -165,8 +170,6 @@ func (m Model) View() string {
 		return overlay(view, m.width, m.height, m.renderBranchPicker())
 	case modeTargetPicker:
 		return overlay(view, m.width, m.height, m.renderTargetPicker())
-	case modeDiff:
-		return m.renderDiffView()
 	case modeHelp:
 		return overlay(view, m.width, m.height, m.renderHelp())
 	default:
@@ -531,25 +534,6 @@ func laneBoxStyle(lane lane, focused bool) lipgloss.Style {
 
 func (m Model) renderKanbanColumn(lane lane, index, width, height int, windowCue string) string {
 	innerW := contentWidth(width)
-	rows := []string{
-		laneMetaLine(lane, innerW),
-	}
-	contents := m.contentForLane(lane)
-	if len(contents) == 0 {
-		hint := "nothing here yet"
-		if lane.Kind == laneAppliedBranch {
-			hint = "nothing assigned — drop files or press c to commit"
-		}
-		rows = append(rows, styleDim.Render(hint))
-	} else {
-		fileCount, commitCount := countContent(contents)
-		for itemIdx, item := range contents {
-			rows = append(rows, m.kanbanItemLine(item, index, itemIdx, innerW))
-			if isFileCommitBoundary(contents, itemIdx) {
-				rows = append(rows, sectionDivider(innerW, fileCount, commitCount))
-			}
-		}
-	}
 	// Reserve space for the pinned status footer (divider + footer row).
 	footer := m.laneFooterLine(lane, innerW)
 	footerRows := 0
@@ -557,7 +541,8 @@ func (m Model) renderKanbanColumn(lane lane, index, width, height int, windowCue
 		footerRows = 2
 	}
 	availRows := max(1, contentHeight(height)-1-footerRows)
-	windowed := windowRows(rows, m.kanbanColumnCursor(index), availRows)
+
+	windowed := m.kanbanColumnRows(lane, index, innerW, availRows)
 	// Pad content to fill the available space so the footer pins to the
 	// bottom of the column instead of floating up when content is short.
 	bodyLines := make([]string, 0, availRows+footerRows)
@@ -571,6 +556,47 @@ func (m Model) renderKanbanColumn(lane lane, index, width, height int, windowCue
 	title := m.laneKanbanTitle(lane, index, windowCue)
 	focused := index == m.laneCursor
 	return boxWithStyle(title, strings.Join(bodyLines, "\n"), width, height, laneBoxStyle(lane, focused))
+}
+
+// kanbanColumnRows returns the windowed body rows of a kanban column. It
+// formats only rows inside the visible window — styling a row costs several
+// ANSI scans, so building all N rows just to discard everything outside the
+// viewport made large lanes pay O(total) per frame. Row layout: [meta, items…]
+// with a section divider inserted after the last file when commits follow
+// (see kanbanColumnCursor).
+func (m Model) kanbanColumnRows(lane lane, index, innerW, availRows int) []string {
+	contents := m.contentForLane(lane)
+	if len(contents) == 0 {
+		hint := "nothing here yet"
+		if lane.Kind == laneAppliedBranch {
+			hint = "nothing assigned — drop files or press c to commit"
+		}
+		return windowRows([]string{laneMetaLine(lane, innerW), styleDim.Render(hint)}, m.kanbanColumnCursor(index), availRows)
+	}
+	fileCount, commitCount := countContent(contents)
+	boundary, hasBoundary := lastFileBoundary(contents)
+	totalRows := 1 + len(contents)
+	if hasBoundary {
+		totalRows++
+	}
+	start := windowStart(totalRows, m.kanbanColumnCursor(index), availRows)
+	end := min(totalRows, start+availRows)
+	windowed := make([]string, 0, end-start)
+	for row := start; row < end; row++ {
+		switch {
+		case row == 0:
+			windowed = append(windowed, laneMetaLine(lane, innerW))
+		case hasBoundary && row == boundary+2:
+			windowed = append(windowed, sectionDivider(innerW, fileCount, commitCount))
+		default:
+			itemIdx := row - 1
+			if hasBoundary && row > boundary+2 {
+				itemIdx = row - 2
+			}
+			windowed = append(windowed, m.kanbanItemLine(contents[itemIdx], index, itemIdx, innerW))
+		}
+	}
+	return windowed
 }
 
 func isFileCommitBoundary(items []contentItem, idx int) bool {
@@ -1472,19 +1498,35 @@ func (m Model) contentLines(width, height int) []string {
 	if len(contents) == 0 {
 		return []string{styleDim.Render("no content")}
 	}
+	// Window first, style second — same rationale as renderKanbanColumn. Row
+	// layout: [items…] with the divider inserted after the last file when
+	// commits follow (row boundary+1; no meta row in the narrow layout).
 	_, commitCount := countContent(contents)
-	rows := make([]string, 0, len(contents)+1)
+	boundary, hasBoundary := lastFileBoundary(contents)
+	totalRows := len(contents)
 	rowCursor := m.contentCursor
-	for idx, item := range contents {
-		rows = append(rows, m.formatContentLine(item, idx, width))
-		if isFileCommitBoundary(contents, idx) {
-			rows = append(rows, sectionDivider(width, 0, commitCount))
-			if m.contentCursor > idx {
-				rowCursor++
-			}
+	if hasBoundary {
+		totalRows++
+		if m.contentCursor > boundary {
+			rowCursor++
 		}
 	}
-	return windowRows(rows, rowCursor, height)
+	start := windowStart(totalRows, rowCursor, height)
+	end := min(totalRows, start+height)
+	rows := make([]string, 0, end-start)
+	for row := start; row < end; row++ {
+		switch {
+		case hasBoundary && row == boundary+1:
+			rows = append(rows, sectionDivider(width, 0, commitCount))
+		default:
+			itemIdx := row
+			if hasBoundary && row > boundary+1 {
+				itemIdx = row - 1
+			}
+			rows = append(rows, m.formatContentLine(contents[itemIdx], itemIdx, width))
+		}
+	}
+	return rows
 }
 
 func (m Model) formatContentLine(item contentItem, idx, width int) string {
@@ -2437,6 +2479,7 @@ func (m Model) renderPalette() string {
 		}
 		rows = append(rows, strings.Replace(raw, action.Key, styleHotKey.Render(action.Key), 1))
 	}
+	rows = windowRows(rows, m.paletteCursor, paletteWindowHeight(m.height))
 	footer := modalFooter(keyHint("enter", "run"), keyHint("j/k", "move"), keyHint("esc", "close"))
 	return renderModal(width, title, strings.Join(rows, "\n"), footer)
 }
@@ -2461,6 +2504,7 @@ func (m Model) renderTargetPicker() string {
 		}
 		rows = append(rows, fitted+meta)
 	}
+	rows = windowRows(rows, m.targetPicker.Cursor, paletteWindowHeight(m.height))
 	hints := []string{keyHint("enter", "select"), keyHint("j/k", "move"), keyHint("esc", "cancel")}
 	return renderModal(width, title, strings.Join(rows, "\n"), modalFooter(hints...))
 }
@@ -2504,27 +2548,56 @@ func (m Model) renderBranchPicker() string {
 func (m Model) renderHelp() string {
 	width := min(86, max(48, m.width-8))
 	header := styleAccent.Render("lazybut · help")
-	body := strings.Join([]string{
+	lines := []string{
 		styleDim.Render("Navigation"),
-		"  " + styleHotKey.Render("h/l") + " " + styleHotLabel.Render("branches") + "   " + styleHotKey.Render("j/k") + " " + styleHotLabel.Render("items") + "   " + styleHotKey.Render("space/v") + " " + styleHotLabel.Render("select") + "   " + styleHotKey.Render("/") + " " + styleHotLabel.Render("filter"),
-		"  " + styleHotKey.Render("enter") + " " + styleHotLabel.Render("inspect file/commit full-screen") + "   " + styleHotKey.Render("=") + " " + styleHotLabel.Render("expand/shrink preview"),
-		"  " + styleHotKey.Render("ctrl+u/d") + " " + styleHotLabel.Render("scroll preview") + "   " + styleHotLabel.Render("(mouse wheel works on every panel)"),
+		"  " + styleHotKey.Render("h/l") + " " + styleHotLabel.Render("branches") + "   " + styleHotKey.Render("j/k") + " " + styleHotLabel.Render("items") + "   " + styleHotKey.Render("space/v") + " " + styleHotLabel.Render("select"),
+		"  " + styleHotKey.Render("enter") + " " + styleHotLabel.Render("inspect") + "   " + styleHotKey.Render("=") + " " + styleHotLabel.Render("preview") + "   " + styleHotKey.Render("ctrl+u/d") + " " + styleHotLabel.Render("scroll"),
+		"  " + styleHotKey.Render("/") + " " + styleHotLabel.Render("filter") + "   " + styleHotKey.Render(":") + " " + styleHotLabel.Render("actions") + "   " + styleHotKey.Render("?") + " " + styleHotLabel.Render("help"),
 		"",
 		styleDim.Render("Workspace"),
-		"  " + styleHotLabel.Render("kanban shows zz + active branches; ") + styleHotKey.Render("+") + " " + styleHotLabel.Render("or") + " " + styleHotKey.Render("B") + " " + styleHotLabel.Render("opens inactive branches"),
-		"  " + styleHotKey.Render("u") + " " + styleHotLabel.Render("checks upstream update; ") + styleHotKey.Render("p") + " " + styleHotLabel.Render("updates/rebases all applied branches"),
-		"  " + styleHotKey.Render("o") + " " + styleHotLabel.Render("create PR; ") + styleHotKey.Render("O") + " " + styleHotLabel.Render("draft PR; ") + styleHotKey.Render("ctrl+o") + " " + styleHotLabel.Render("copy PR URL; ") + styleHotKey.Render("ctrl+g") + " " + styleHotLabel.Render("GitHub sign-in"),
+		"  " + styleHotKey.Render("+/B") + " " + styleHotLabel.Render("add branch") + "   " + styleHotKey.Render("u") + " " + styleHotLabel.Render("check upstream") + "   " + styleHotKey.Render("p") + " " + styleHotLabel.Render("update/rebase"),
 		"",
-		styleDim.Render("Actions"),
-		"  " + styleHotKey.Render(":") + " " + styleHotLabel.Render("action palette") + "   " + styleHotKey.Render("space/v") + " " + styleHotLabel.Render("select"),
-		"  " + styleHotLabel.Render("destructive actions ask confirmation before running ") + styleAccent.Render("but"),
+		styleDim.Render("Actions") + " " + styleHotLabel.Render("· keys vary with the current selection"),
+	}
+	// The action list is declarative (availableActions drives the palette,
+	// hotbar, and key dispatch) — generate the help from the same source so it
+	// can never drift from the real bindings.
+	actions := m.availableActions()
+	colW := (width - 6) / 2
+	// overlay() hard-truncates modals taller than the viewport; budget the
+	// action rows against the fixed chrome (sections above/below + border,
+	// padding, header) and fold the overflow into a "+N more" line.
+	rowBudget := max(1, m.height-18)
+	truncated := 0
+	if (len(actions)+1)/2 > rowBudget {
+		shown := max(0, rowBudget-1) * 2
+		truncated = len(actions) - shown
+		actions = actions[:shown]
+	}
+	for i := 0; i < len(actions); i += 2 {
+		row := "  " + helpActionCell(actions[i], colW)
+		if i+1 < len(actions) {
+			row += helpActionCell(actions[i+1], colW)
+		}
+		lines = append(lines, row)
+	}
+	if truncated > 0 {
+		lines = append(lines, "  "+styleHotLabel.Render(fmt.Sprintf("+%d more — press : for the full palette", truncated)))
+	}
+	lines = append(lines,
 		"",
-		styleDim.Render("Layout"),
-		"  " + styleHotLabel.Render("kanban above ~70 cols · tabbed single lane below · preview docks at the bottom"),
-		"",
-		styleHotKey.Render("esc") + " " + styleHotLabel.Render("closes this help"),
-	}, "\n")
-	return styleOverlay.Width(width).Render(header + "\n\n" + body)
+		styleHotKey.Render("esc")+" "+styleHotLabel.Render("closes this help"),
+	)
+	return styleOverlay.Width(width).Render(header + "\n\n" + strings.Join(lines, "\n"))
+}
+
+func helpActionCell(a action, width int) string {
+	key := a.Key
+	if key == "" {
+		key = "enter"
+	}
+	cell := styleHotKey.Render(fmt.Sprintf("%-7s", key)) + " " + styleHotLabel.Render(a.Label)
+	return padRight(fit(cell, width), width)
 }
 
 func (m Model) laneKanbanTitle(lane lane, index int, windowCue string) string {

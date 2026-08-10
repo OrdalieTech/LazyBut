@@ -1,10 +1,14 @@
 package tui
 
 import (
-	"fmt"
+	"encoding/base64"
+	"errors"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"github.com/charmbracelet/x/term"
 )
 
 // copyToClipboard copies text to the system clipboard. It tries, in order:
@@ -14,10 +18,30 @@ import (
 // OSC 52 is tried first because it works over SSH — the terminal on the local
 // machine interprets the sequence and updates its own clipboard.
 func copyToClipboard(text string) error {
-	// OSC 52: write base64-ish payload inside an escape sequence that the
-	// terminal interprets as a clipboard write. Most modern terminals
-	// (iTerm2, Alacritty, kitty, Windows Terminal, tmux) support this.
-	fmt.Printf("\x1b]52;c;%s\x07", base64Encode(text))
+	// OSC 52: base64 payload inside an escape sequence that the terminal
+	// interprets as a clipboard write. Most modern terminals (iTerm2,
+	// Alacritty, kitty, Windows Terminal, tmux) support this. Emitted on
+	// one write to the terminal, preferring stderr so Bubble Tea cannot
+	// interleave a frame flush mid-sequence. If stderr was redirected, write
+	// directly to the controlling terminal instead.
+	osc52Written := false
+	output := os.Stderr
+	var tty *os.File
+	if !term.IsTerminal(output.Fd()) {
+		tty, _ = os.OpenFile("/dev/tty", os.O_WRONLY, 0)
+		if tty != nil {
+			defer tty.Close()
+			output = tty
+		} else if term.IsTerminal(os.Stdout.Fd()) {
+			output = os.Stdout
+		} else {
+			output = nil
+		}
+	}
+	if output != nil {
+		_, err := output.WriteString("\x1b]52;c;" + base64.StdEncoding.EncodeToString([]byte(text)) + "\x07")
+		osc52Written = err == nil
+	}
 	// Also try native clipboards as a backup for terminals that ignore OSC 52.
 	var cmds [][]string
 	switch runtime.GOOS {
@@ -39,40 +63,8 @@ func copyToClipboard(text string) error {
 			return nil
 		}
 	}
-	return nil // OSC 52 was already emitted; native failure is non-fatal.
-}
-
-// base64Encode is a minimal base64 encoder (standard alphabet, no padding) so
-// we don't pull in encoding/base64 just for clipboard text.
-func base64Encode(s string) string {
-	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-	data := []byte(s)
-	var b strings.Builder
-	for i := 0; i < len(data); i += 3 {
-		b0 := data[i]
-		b1 := byte(0)
-		b2 := byte(0)
-		n := 1
-		if i+1 < len(data) {
-			b1 = data[i+1]
-			n = 2
-		}
-		if i+2 < len(data) {
-			b2 = data[i+2]
-			n = 3
-		}
-		b.WriteByte(alphabet[b0>>2])
-		b.WriteByte(alphabet[((b0&0x03)<<4)|(b1>>4)])
-		if n == 1 {
-			b.WriteString("==")
-			break
-		}
-		b.WriteByte(alphabet[((b1&0x0f)<<2)|(b2>>6)])
-		if n == 2 {
-			b.WriteByte('=')
-			break
-		}
-		b.WriteByte(alphabet[b2&0x3f])
+	if osc52Written {
+		return nil
 	}
-	return b.String()
+	return errors.New("no terminal or native clipboard available")
 }
