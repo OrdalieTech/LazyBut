@@ -817,10 +817,10 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 			id:         actionForcePush,
 			laneCursor: 1,
 			outputs: map[string][]byte{
-				"push feature/ui --with-force": []byte("pushed"),
-				"status --json":                statusRaw,
+				"push feature/ui --skip-force-push-protection": []byte("pushed"),
+				"status --json": statusRaw,
 			},
-			want: [][]string{{"push", "feature/ui", "--with-force"}, {"status", "--json"}},
+			want: [][]string{{"push", "feature/ui", "--skip-force-push-protection"}, {"status", "--json"}},
 		},
 		{
 			name:       "new pr",
@@ -1094,6 +1094,20 @@ func TestGenericActionErrorGoesToToastNotPreview(t *testing.T) {
 		t.Fatalf("generic error should not open a modal, mode=%d", m.mode)
 	}
 	if m.toastKind != toastError || !strings.Contains(m.toast, "something broke") {
+		t.Fatalf("toast = %q/%d", m.toast, m.toastKind)
+	}
+}
+
+func TestMutationErrorGoesToToastNotFlash(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	err := errors.New("exit status 1: Error: GitForcePushProtection\n\nCaused by:\n    remote commits would be overwritten")
+
+	next, _ := model.Update(mutationMsg{err: err})
+	m := next.(Model)
+	if m.err != nil {
+		t.Fatalf("mutation error leaked into flash: %v", m.err)
+	}
+	if m.toast != "remote commits would be overwritten — use force push only if intentional" || m.toastKind != toastError {
 		t.Fatalf("toast = %q/%d", m.toast, m.toastKind)
 	}
 }

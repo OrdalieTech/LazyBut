@@ -385,7 +385,7 @@ func (c *Client) PullCheck(ctx context.Context) (string, error) {
 func (c *Client) Push(ctx context.Context, branch string, force bool) (*WorkspaceStatus, error) {
 	args := []string{"push", branch}
 	if force {
-		args = append(args, "--with-force")
+		args = append(args, "--skip-force-push-protection")
 	}
 	if _, err := c.runText(ctx, args...); err != nil {
 		return nil, err

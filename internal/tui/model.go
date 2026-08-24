@@ -431,7 +431,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case mutationMsg:
 		m = m.stopLoading()
-		m.err = msg.err
+		m.err = nil
 		if msg.err == nil && msg.status != nil {
 			m = m.replaceData(msg.status, m.data.Branches)
 			toastText, kind := m.mutationToast(msg.label, msg.status)
@@ -2154,6 +2154,9 @@ func humanizeCLIError(err error) string {
 	low := strings.ToLower(msg)
 	if strings.Contains(low, "forge auth") || strings.Contains(low, "authenticated forge") {
 		return "GitHub auth needed — press ctrl+g to sign in, then retry"
+	}
+	if strings.Contains(low, "gitforcepushprotection") {
+		return "remote commits would be overwritten — use force push only if intentional"
 	}
 	// Otherwise collapse to the first meaningful line, dropping the generic
 	// "Error:"/"Caused by:" scaffolding `but` prints.
