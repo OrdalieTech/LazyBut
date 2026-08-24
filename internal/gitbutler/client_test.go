@@ -596,8 +596,8 @@ func TestClientPushRefreshesWithoutStatusAfter(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &fakeRunner{outputs: map[string][]byte{
-		"push feature/ui --with-force": []byte("pushed"),
-		"status --json":                statusRaw,
+		"push feature/ui --skip-force-push-protection": []byte("pushed"),
+		"status --json": statusRaw,
 	}}
 	client := NewClient(".", runner)
 
@@ -609,7 +609,7 @@ func TestClientPushRefreshesWithoutStatusAfter(t *testing.T) {
 		t.Fatalf("unexpected status: %#v", status.Stacks)
 	}
 	want := [][]string{
-		{"push", "feature/ui", "--with-force"},
+		{"push", "feature/ui", "--skip-force-push-protection"},
 		{"status", "--json"},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
