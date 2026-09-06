@@ -706,7 +706,7 @@ func TestUpstreamConfirmShowsMergedBranchCleanup(t *testing.T) {
 	model.height = 36
 
 	view := model.renderUpstreamConfirm()
-	for _, want := range []string{"merged branch cleanup", "merged branches will be deleted", "feature/ui", "merged"} {
+	for _, want := range []string{"merged branch cleanup", "GitButler will clean integrated branches", "feature/ui", "merged"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("upstream cleanup confirm should contain %q:\n%s", want, view)
 		}
@@ -923,6 +923,16 @@ func TestHotbarKeepsMetaKeysAtNarrowWidth(t *testing.T) {
 	for _, want := range []string{"quit", "help", "actions", "preview", "inspect"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("hotbar should always keep meta label %q at narrow width\n%s", want, view)
+		}
+	}
+}
+
+func TestFitPreservesGraphemesAndHyperlinks(t *testing.T) {
+	for _, value := range []string{"👩‍💻👩‍💻👩‍💻abcdef", "e\u0301e\u0301e\u0301abcdef", "\x1b]8;;https://example.com\x1b\\abcdefghi\x1b]8;;\x1b\\"} {
+		for width := 1; width < 12; width++ {
+			if got := fit(value, width); lipgloss.Width(got) > width {
+				t.Fatalf("width %d overflow: %q", width, got)
+			}
 		}
 	}
 }

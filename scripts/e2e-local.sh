@@ -100,6 +100,9 @@ ALPHA_ID="$(change_id "$REPO" alpha.txt)"
 run_retry but -C "$REPO" commit -b e2e-alpha -m "add alpha" "$ALPHA_ID" --json --status-after >/dev/null
 status_json
 
+log "client compatibility"
+run env LAZYBUT_TEST_REPO="$REPO" go -C "$ROOT" test ./internal/gitbutler -run TestCLICompatibility -count=1
+
 log "second selected commit"
 printf 'beta one\n' >"$REPO/beta.txt"
 BETA_ID="$(change_id "$REPO" beta.txt)"
@@ -110,13 +113,16 @@ log "amend, squash, uncommit, and recommit"
 printf 'amended\n' >"$REPO/amended.txt"
 AMEND_ID="$(change_id "$REPO" amended.txt)"
 run_retry but -C "$REPO" amend -t e2e-alpha "$AMEND_ID" --json --status-after >/dev/null
-mapfile -t ALPHA_COMMITS < <(branch_commit_ids "$REPO" e2e-alpha)
+ALPHA_COMMITS=()
+while IFS= read -r id; do ALPHA_COMMITS+=("$id"); done < <(branch_commit_ids "$REPO" e2e-alpha)
 [[ "${#ALPHA_COMMITS[@]}" == "2" ]]
 run_retry but -C "$REPO" squash "${ALPHA_COMMITS[0]}" -t "${ALPHA_COMMITS[1]}" --use-target-message --json --status-after >/dev/null
-mapfile -t ALPHA_COMMITS < <(branch_commit_ids "$REPO" e2e-alpha)
+ALPHA_COMMITS=()
+while IFS= read -r id; do ALPHA_COMMITS+=("$id"); done < <(branch_commit_ids "$REPO" e2e-alpha)
 [[ "${#ALPHA_COMMITS[@]}" == "1" ]]
 run_retry but -C "$REPO" uncommit "${ALPHA_COMMITS[0]}" --json --status-after >/dev/null
-mapfile -t RECOMMIT_IDS < <(but -C "$REPO" status --json | jq -er '(.uncommittedChanges // .unassignedChanges // [])[].cliId')
+RECOMMIT_IDS=()
+while IFS= read -r id; do RECOMMIT_IDS+=("$id"); done < <(but -C "$REPO" status --json | jq -er '(.uncommittedChanges // .unassignedChanges // [])[].cliId')
 [[ "${#RECOMMIT_IDS[@]}" == "3" ]]
 run_retry but -C "$REPO" commit -b e2e-alpha -m "recommit alpha" "${RECOMMIT_IDS[@]}" --json --status-after >/dev/null
 

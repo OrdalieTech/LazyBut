@@ -24,7 +24,7 @@ GitButler behavior to the official `but` CLI instead of reimplementing Git logic
 
 ## Requirements
 
-- GitButler CLI 0.22 or newer available as `but` (the installer can install it for you)
+- GitButler CLI 0.22 or newer available as `but` (tested with 0.22.0 and 0.22.3; the installer can install it for you)
 - A Git repository; LazyBut can offer to run `but setup` on first start
 - A terminal with color support; mouse support is optional but enabled when available
 - Go 1.26+ only if building from source
@@ -44,15 +44,15 @@ asks whether it should install the official GitButler CLI too.
 Override the install directory or version:
 
 ```sh
-LAZYBUT_INSTALL_DIR="$HOME/bin" curl -fsSL https://raw.githubusercontent.com/OrdalieTech/LazyBut/main/install.sh | bash
-LAZYBUT_VERSION=v0.1.0 curl -fsSL https://raw.githubusercontent.com/OrdalieTech/LazyBut/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/OrdalieTech/LazyBut/main/install.sh | LAZYBUT_INSTALL_DIR="$HOME/bin" bash
+curl -fsSL https://raw.githubusercontent.com/OrdalieTech/LazyBut/main/install.sh | LAZYBUT_VERSION=v0.1.0 bash
 ```
 
 For non-interactive installs:
 
 ```sh
-LAZYBUT_INSTALL_GITBUTLER=1 curl -fsSL https://raw.githubusercontent.com/OrdalieTech/LazyBut/main/install.sh | bash
-LAZYBUT_INSTALL_GITBUTLER=0 curl -fsSL https://raw.githubusercontent.com/OrdalieTech/LazyBut/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/OrdalieTech/LazyBut/main/install.sh | LAZYBUT_INSTALL_GITBUTLER=1 bash
+curl -fsSL https://raw.githubusercontent.com/OrdalieTech/LazyBut/main/install.sh | LAZYBUT_INSTALL_GITBUTLER=0 bash
 ```
 
 Go install also works:
@@ -123,7 +123,7 @@ palette listing every action available in the current context. Highlights:
 - `A`: amend selected change into a commit
 - `Q`: squash commits
 - `M`: move a commit, or stack/unstack the selected branch
-- `ctrl+m`: land the selected branch directly on the target
+- `alt+m`: land the selected branch directly on the target
 - `d`: discard selected change
 - `D`: delete selected branch
 - `P`: push selected branch
@@ -146,7 +146,7 @@ LazyBut models GitButler desktop's "Update workspace" flow for the terminal:
 - If the target branch has incoming commits or a PR-merged branch can be cleaned, it opens a navigable update modal.
 - `u` remains available for a non-mutating check before running the update.
 - `y` / `enter` runs `but pull`, which fetches the target branch and rebases/restacks applied branches.
-- When the modal lists merged branch cleanups, `y` / `enter` also removes those local branches with the undoable `but discard` operation.
+- GitButler handles integrated branch cleanup during `but pull`; LazyBut never deletes branches based on cached PR metadata.
 - Conflicts reported by GitButler are surfaced in the TUI.
 
 ## Architecture

@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -30,7 +32,14 @@ func (r ExecRunner) Run(ctx context.Context, dir string, args ...string) ([]byte
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
+	// Keep diagnostics out of successful JSON and text output.
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	cmd.Env = append(os.Environ(), "BUT_OUTPUT_FORMAT=human", "BUT_PAGER=cat", "NO_COLOR=1", "GIT_TERMINAL_PROMPT=0", "GH_PROMPT_DISABLED=1")
+	out, err := cmd.Output()
+	if err != nil {
+		out = append(out, stderr.Bytes()...)
+	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return out, ctxErr
 	}
@@ -41,6 +50,8 @@ type Client struct {
 	Dir      string
 	Runner   Runner
 	GHRunner Runner
+
+	diffWithoutNoTUI atomic.Bool
 
 	githubMu              sync.Mutex
 	githubPRs             map[string]Review
@@ -87,7 +98,7 @@ func (c *Client) ForgeAuthCommand(ctx context.Context) *exec.Cmd {
 
 func (c *Client) Status(ctx context.Context) (*WorkspaceStatus, error) {
 	var status WorkspaceStatus
-	if err := c.runJSON(ctx, &status, "status", "--json"); err != nil {
+	if err := c.runJSON(ctx, &status, "status", "--json", "--upstream"); err != nil {
 		return nil, err
 	}
 	c.enrichStatusWithGitHubPRs(ctx, &status)
@@ -231,7 +242,7 @@ func (c *Client) githubPullRequests(ctx context.Context) map[string]Review {
 	now := time.Now()
 	c.githubMu.Lock()
 	if now.Before(c.githubPRsExpiresAt) {
-		prs := cloneReviewMap(c.githubPRs)
+		prs := maps.Clone(c.githubPRs)
 		c.githubMu.Unlock()
 		return prs
 	}
@@ -239,7 +250,7 @@ func (c *Client) githubPullRequests(ctx context.Context) map[string]Review {
 		// Stale-while-revalidate: serve the expired cache immediately and
 		// refresh once in the background, so only the first fill ever blocks
 		// Status/BranchList on `gh pr list`.
-		prs := cloneReviewMap(c.githubPRs)
+		prs := maps.Clone(c.githubPRs)
 		if !now.Before(c.githubPRErrorBackoff) && !c.githubRefreshInFlight {
 			c.githubRefreshInFlight = true
 			go func() {
@@ -288,22 +299,11 @@ func (c *Client) fetchGitHubPullRequests(ctx context.Context) map[string]Review 
 	}
 
 	c.githubMu.Lock()
-	c.githubPRs = cloneReviewMap(prs)
+	c.githubPRs = maps.Clone(prs)
 	c.githubPRsExpiresAt = time.Now().Add(githubPRCacheTTL)
 	c.githubPRErrorBackoff = time.Time{}
 	c.githubMu.Unlock()
 	return prs
-}
-
-func cloneReviewMap(in map[string]Review) map[string]Review {
-	if in == nil {
-		return nil
-	}
-	out := make(map[string]Review, len(in))
-	for name, review := range in {
-		out[name] = review
-	}
-	return out
 }
 
 func (c *Client) Setup(ctx context.Context, init bool) (*WorkspaceStatus, error) {
@@ -319,14 +319,20 @@ func (c *Client) Show(ctx context.Context, target string) (string, error) {
 }
 
 func (c *Client) Diff(ctx context.Context, target string) (string, error) {
-	// --no-tui is essential: `but diff` can launch an interactive TUI diff
-	// viewer when `but.ui.tui` is configured on, which would hijack the terminal
-	// out from under LazyBut. We only ever want the plain text diff for the
-	// preview pane.
-	if target == "" {
-		return c.runText(ctx, "diff", "--no-tui")
+	// 0.22.2 removed --no-tui. Older versions need it when their TUI is enabled.
+	args := []string{"diff"}
+	if !c.diffWithoutNoTUI.Load() {
+		args = append(args, "--no-tui")
 	}
-	return c.runText(ctx, "diff", target, "--no-tui")
+	if target != "" {
+		args = append(args, target)
+	}
+	out, err := c.runText(ctx, args...)
+	if err != nil && strings.Contains(err.Error(), "unexpected argument '--no-tui'") {
+		c.diffWithoutNoTUI.Store(true)
+		return c.runText(ctx, append([]string{"diff"}, args[2:]...)...)
+	}
+	return out, err
 }
 
 func (c *Client) Apply(ctx context.Context, branch string) (*WorkspaceStatus, error) {

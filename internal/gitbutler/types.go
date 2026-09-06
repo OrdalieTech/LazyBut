@@ -8,6 +8,7 @@ import (
 )
 
 type WorkspaceStatus struct {
+	ConflictedFiles   []string      `json:"conflictedFiles"`
 	UnassignedChanges []FileChange  `json:"unassignedChanges"`
 	Stacks            []Stack       `json:"stacks"`
 	MergeBase         Commit        `json:"mergeBase"`
@@ -27,7 +28,7 @@ func (w *WorkspaceStatus) UnmarshalJSON(raw []byte) error {
 		return err
 	}
 	*w = WorkspaceStatus(shadow.ws)
-	if len(w.UnassignedChanges) == 0 {
+	if shadow.Uncommitted != nil {
 		w.UnassignedChanges = shadow.Uncommitted
 	}
 	return nil
@@ -61,6 +62,8 @@ type Branch struct {
 }
 
 type CI struct {
+	Status            StatusText `json:"status"`
+	Conclusion        StatusText `json:"conclusion"`
 	OverallConclusion StatusText `json:"overallConclusion"`
 	Pending           []string   `json:"pendingCheckTitles"`
 	Passing           []string   `json:"passingCheckTitles"`
