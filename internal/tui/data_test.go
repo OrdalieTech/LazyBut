@@ -143,3 +143,24 @@ func TestContentForAppliedBranchSurfacesUpstreamCommitsBeforeLocalStack(t *testi
 		t.Fatalf("local commits should follow upstream commits: %#v", items[1])
 	}
 }
+
+func TestCurrentCIAndConflictedFiles(t *testing.T) {
+	status := &gitbutler.WorkspaceStatus{ConflictedFiles: []string{"conflict.txt"}, Stacks: []gitbutler.Stack{{Branches: []gitbutler.Branch{{Name: "feature", CI: &gitbutler.CI{Status: "inProgress", Conclusion: "success"}}}}}}
+	model := newModel(gitbutler.NewClient(".", nil))
+	model.data = buildWorkspaceData(status, nil)
+	if model.data.Lanes[1].CIConclusion != "pending" {
+		t.Fatal("running CI shown as passed")
+	}
+	if model.data.Lanes[0].ChangeCount != 1 || model.previewSelectionTarget() != "git:conflict.txt" {
+		t.Fatal("conflicted file missing from workspace")
+	}
+	for _, a := range model.availableActions() {
+		if a.ID == actionCommit || a.ID == actionAmend || a.ID == actionDiscard {
+			t.Fatalf("conflicted file offers %s", a.ID)
+		}
+	}
+	status.Stacks[0].Branches[0].CI.Conclusion = "failure"
+	if buildWorkspaceData(status, nil).Lanes[1].CIConclusion != "failure" {
+		t.Fatal("running checks hide CI failure")
+	}
+}

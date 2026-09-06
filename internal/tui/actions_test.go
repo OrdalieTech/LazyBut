@@ -616,9 +616,9 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 			name: "refresh",
 			id:   actionRefresh,
 			outputs: map[string][]byte{
-				"status --json": statusRaw,
+				"status --json --upstream": statusRaw,
 			},
-			want: [][]string{{"status", "--json"}},
+			want: [][]string{{"status", "--json", "--upstream"}},
 		},
 		{
 			name: "setup",
@@ -799,10 +799,10 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 			id:         actionPush,
 			laneCursor: 1,
 			outputs: map[string][]byte{
-				"push feature/ui": []byte("pushed"),
-				"status --json":   statusRaw,
+				"push feature/ui":          []byte("pushed"),
+				"status --json --upstream": statusRaw,
 			},
-			want: [][]string{{"push", "feature/ui"}, {"status", "--json"}},
+			want: [][]string{{"push", "feature/ui"}, {"status", "--json", "--upstream"}},
 		},
 		{
 			name:       "push dry-run",
@@ -819,9 +819,9 @@ func TestActionDispatchRunsExpectedGitButlerCommands(t *testing.T) {
 			laneCursor: 1,
 			outputs: map[string][]byte{
 				"push feature/ui --skip-force-push-protection": []byte("pushed"),
-				"status --json": statusRaw,
+				"status --json --upstream":                     statusRaw,
 			},
-			want: [][]string{{"push", "feature/ui", "--skip-force-push-protection"}, {"status", "--json"}},
+			want: [][]string{{"push", "feature/ui", "--skip-force-push-protection"}, {"status", "--json", "--upstream"}},
 		},
 		{
 			name:       "new pr",
@@ -1184,7 +1184,7 @@ func TestUpdateFromUpstreamRefreshesBeforeSayingNoUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &actionRunner{outputs: map[string][]byte{
-		"status --json": statusRaw,
+		"status --json --upstream": statusRaw,
 	}}
 	model = newModel(gitbutler.NewClient(".", runner))
 	model.data = buildWorkspaceData(status, loadFixtureBranches(t))
@@ -1231,7 +1231,7 @@ func TestPullCleansMergedBranchWithoutIncomingTargetCommits(t *testing.T) {
 	markFixtureBranchMerged(status)
 	wrapped := wrapStatusAfter(t, status)
 	runner := &actionRunner{outputs: map[string][]byte{
-		"discard feature/ui --json --status-after": wrapped,
+		"pull --json --status-after": wrapped,
 	}}
 	model := newModel(gitbutler.NewClient(".", runner))
 	model.data = buildWorkspaceData(status, loadFixtureBranches(t))
@@ -1247,7 +1247,7 @@ func TestPullCleansMergedBranchWithoutIncomingTargetCommits(t *testing.T) {
 	if msg.err != nil {
 		t.Fatalf("cleanup failed: %v", msg.err)
 	}
-	want := [][]string{{"discard", "feature/ui", "--json", "--status-after"}}
+	want := [][]string{{"pull", "--json", "--status-after"}}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
 	}
@@ -1261,8 +1261,7 @@ func TestPullUpdatesThenCleansMergedBranchWithIncomingTargetCommits(t *testing.T
 	status.UpstreamState.UpstreamCommits = []gitbutler.Commit{status.UpstreamState.LatestCommit}
 	wrapped := wrapStatusAfter(t, status)
 	runner := &actionRunner{outputs: map[string][]byte{
-		"pull --json --status-after":               wrapped,
-		"discard feature/ui --json --status-after": wrapped,
+		"pull --json --status-after": wrapped,
 	}}
 	model := newModel(gitbutler.NewClient(".", runner))
 	model.data = buildWorkspaceData(status, loadFixtureBranches(t))
@@ -1280,7 +1279,6 @@ func TestPullUpdatesThenCleansMergedBranchWithIncomingTargetCommits(t *testing.T
 	}
 	want := [][]string{
 		{"pull", "--json", "--status-after"},
-		{"discard", "feature/ui", "--json", "--status-after"},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
@@ -1293,7 +1291,7 @@ func TestStartupRefreshMsgStartsInitialStatusLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &actionRunner{outputs: map[string][]byte{
-		"status --json": statusRaw,
+		"status --json --upstream": statusRaw,
 	}}
 	model := newModel(gitbutler.NewClient(".", runner))
 
@@ -1313,8 +1311,8 @@ func TestStartupRefreshMsgStartsInitialStatusLoad(t *testing.T) {
 	if full.err != nil || full.status == nil {
 		t.Fatalf("startup refresh failed: status nil=%v err=%v", full.status == nil, full.err)
 	}
-	if got := strings.Join(runner.calls[0], " "); got != "status --json" {
-		t.Fatalf("command = %q, want status --json", got)
+	if got := strings.Join(runner.calls[0], " "); got != "status --json --upstream" {
+		t.Fatalf("command = %q, want status --json --upstream", got)
 	}
 }
 
@@ -1389,7 +1387,7 @@ func TestAutoRefreshStatusOnly(t *testing.T) {
 	}
 
 	runner := &actionRunner{outputs: map[string][]byte{
-		"status --json": statusRaw,
+		"status --json --upstream": statusRaw,
 	}}
 	model := newModel(gitbutler.NewClient(".", runner))
 	model.loading = false
@@ -1404,7 +1402,7 @@ func TestAutoRefreshStatusOnly(t *testing.T) {
 	if _, ok := cmd().(autoRefreshMsg); !ok {
 		t.Fatalf("unexpected message from auto refresh")
 	}
-	if !reflect.DeepEqual(runner.calls, [][]string{{"status", "--json"}}) {
+	if !reflect.DeepEqual(runner.calls, [][]string{{"status", "--json", "--upstream"}}) {
 		t.Fatalf("calls = %#v", runner.calls)
 	}
 
@@ -1415,7 +1413,7 @@ func TestAutoRefreshStatusOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner = &actionRunner{outputs: map[string][]byte{
-		"status --json":            statusRaw,
+		"status --json --upstream": statusRaw,
 		"branch list --json --all": branchesRaw,
 	}}
 	model = newModel(gitbutler.NewClient(".", runner))
@@ -1432,7 +1430,7 @@ func TestAutoRefreshStatusOnly(t *testing.T) {
 	if msg.branches == nil {
 		t.Fatal("branch-including refresh should return a branch list")
 	}
-	if !reflect.DeepEqual(runner.calls, [][]string{{"status", "--json"}, {"branch", "list", "--json", "--all"}}) {
+	if !reflect.DeepEqual(runner.calls, [][]string{{"status", "--json", "--upstream"}, {"branch", "list", "--json", "--all"}}) {
 		t.Fatalf("calls = %#v", runner.calls)
 	}
 }
@@ -1497,5 +1495,19 @@ func TestAutoRefreshPreservesSelectionByStableIDs(t *testing.T) {
 	item, ok := next.selectedContent()
 	if !ok || item.ID != "c1" {
 		t.Fatalf("selected item = %#v, ok=%v", item, ok)
+	}
+}
+
+func TestLandShortcutDoesNotCollideWithEnter(t *testing.T) {
+	model := newModel(gitbutler.NewClient(".", nil))
+	model.data = buildWorkspaceData(loadFixtureStatus(t), nil)
+	model.laneCursor = 1
+	next, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m"), Alt: true})
+	if got := next.(Model); got.mode != modeConfirm || got.confirm.Action.ID != actionLand {
+		t.Fatal("Alt+M should confirm landing")
+	}
+	next, _ = model.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := next.(Model); got.mode == modeConfirm && got.confirm.Action.ID == actionLand {
+		t.Fatal("Enter must not land a branch")
 	}
 }

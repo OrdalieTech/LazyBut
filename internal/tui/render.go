@@ -10,8 +10,7 @@ import (
 	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mattn/go-runewidth"
-	"github.com/muesli/ansi"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/OrdalieTech/LazyBut/internal/gitbutler"
 )
@@ -2076,7 +2075,7 @@ func (m Model) renderUpstreamConfirm() string {
 	if incoming > 0 {
 		rows = append(rows, "", m.renderIncomingCard(innerW))
 	} else if mergedCleanup > 0 {
-		rows = append(rows, "", styleMerged.Render(glyphMerged+" merged branches will be deleted after update"))
+		rows = append(rows, "", styleMerged.Render(glyphMerged+" GitButler will clean integrated branches during update"))
 	}
 	branchLabel := "branches to rebase"
 	if incoming == 0 && mergedCleanup > 0 {
@@ -2796,37 +2795,7 @@ func ansiSplit(s string, cols int) (left, right string) {
 	if cols <= 0 {
 		return "", s
 	}
-	var leftBuf, rightBuf strings.Builder
-	width := 0
-	inEsc := false
-	cut := false
-	for _, r := range s {
-		if cut {
-			rightBuf.WriteRune(r)
-			continue
-		}
-		if r == 0x1b {
-			inEsc = true
-			leftBuf.WriteRune(r)
-			continue
-		}
-		if inEsc {
-			leftBuf.WriteRune(r)
-			if ansi.IsTerminator(r) {
-				inEsc = false
-			}
-			continue
-		}
-		w := runewidth.RuneWidth(r)
-		if width+w > cols {
-			cut = true
-			rightBuf.WriteRune(r)
-			continue
-		}
-		width += w
-		leftBuf.WriteRune(r)
-	}
-	return leftBuf.String(), rightBuf.String()
+	return ansi.Cut(s, 0, cols), ansi.Cut(s, cols, ansi.StringWidth(s))
 }
 
 func itemKindLabel(kind contentKind) string {
@@ -2871,34 +2840,7 @@ func fit(value string, width int) string {
 	if width <= lipgloss.Width(ellipsis) {
 		return strings.Repeat(".", width)
 	}
-	limit := width - lipgloss.Width(ellipsis)
-	var out strings.Builder
-	out.Grow(len(value))
-	acc := 0
-	inEsc := false
-	for _, r := range value {
-		if r == 0x1b {
-			inEsc = true
-			out.WriteRune(r)
-			continue
-		}
-		if inEsc {
-			out.WriteRune(r)
-			if ansi.IsTerminator(r) {
-				inEsc = false
-			}
-			continue
-		}
-		w := runewidth.RuneWidth(r)
-		if acc+w > limit {
-			break
-		}
-		acc += w
-		out.WriteRune(r)
-	}
-	// Reset any in-flight ANSI styling so the ellipsis isn't tinted by a
-	// truncated style span.
-	return out.String() + "\x1b[0m" + ellipsis
+	return ansi.Truncate(value, width, "\x1b[0m"+ellipsis)
 }
 
 func padRight(value string, width int) string {
@@ -2943,18 +2885,4 @@ func windowStart(total, cursor, height int) int {
 		start = total - height
 	}
 	return start
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

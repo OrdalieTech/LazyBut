@@ -60,7 +60,7 @@ func TestClientStatusUsesJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner := &fakeRunner{outputs: map[string][]byte{"status --json": statusRaw}}
+	runner := &fakeRunner{outputs: map[string][]byte{"status --json --upstream": statusRaw}}
 	client := NewClient(".", runner)
 
 	status, err := client.Status(context.Background())
@@ -70,7 +70,7 @@ func TestClientStatusUsesJSON(t *testing.T) {
 	if status.UnassignedChanges[0].CLIID != "ur" {
 		t.Fatalf("unexpected status: %#v", status.UnassignedChanges)
 	}
-	if !reflect.DeepEqual(runner.calls[0], []string{"status", "--json"}) {
+	if !reflect.DeepEqual(runner.calls[0], []string{"status", "--json", "--upstream"}) {
 		t.Fatalf("calls = %#v", runner.calls)
 	}
 }
@@ -97,7 +97,7 @@ func TestClientStatusReconcilesStaleGitHubPRAndCachesResult(t *testing.T) {
 		"mergeBase": {},
 		"upstreamState": {}
 	}`)
-	butRunner := &fakeRunner{outputs: map[string][]byte{"status --json": statusRaw}}
+	butRunner := &fakeRunner{outputs: map[string][]byte{"status --json --upstream": statusRaw}}
 	ghRunner := &fakeRunner{outputs: map[string][]byte{
 		"pr list --state all --json number,url,headRefName,state,mergedAt --limit 1000": []byte(`[{"number":781,"url":"https://github.com/OrdalieTech/Ordalie-back/pull/781","headRefName":"glose-os-poc","state":"MERGED","mergedAt":"2026-07-08T13:08:08Z"}]`),
 	}}
@@ -190,7 +190,7 @@ func waitForGitHubRefresh(t *testing.T, c *Client) {
 }
 
 func TestClientGitHubPRStaleCacheRefreshesInBackground(t *testing.T) {
-	butRunner := &fakeRunner{outputs: map[string][]byte{"status --json": testGitHubEnrichableStatusJSON()}}
+	butRunner := &fakeRunner{outputs: map[string][]byte{"status --json --upstream": testGitHubEnrichableStatusJSON()}}
 	gate := make(chan struct{})
 	ghRunner := &fakeRunner{
 		gate: gate,
@@ -235,7 +235,7 @@ func TestClientGitHubPRStaleCacheRefreshesInBackground(t *testing.T) {
 }
 
 func TestClientGitHubPRBackgroundRefreshErrorSetsBackoff(t *testing.T) {
-	butRunner := &fakeRunner{outputs: map[string][]byte{"status --json": testGitHubEnrichableStatusJSON()}}
+	butRunner := &fakeRunner{outputs: map[string][]byte{"status --json --upstream": testGitHubEnrichableStatusJSON()}}
 	ghRunner := &fakeRunner{errs: map[string]error{testGHPRListKey: errors.New("exit status 1")}}
 	client := NewClient(".", butRunner)
 	client.GHRunner = ghRunner
@@ -316,7 +316,7 @@ func TestClientMutationAcceptsStringStatusAfter(t *testing.T) {
 	wrapped = append(wrapped, '}')
 	runner := &fakeRunner{outputs: map[string][]byte{
 		"pull --json --status-after": []byte(`{"result":{},"status":"updated"}`),
-		"status --json":              statusRaw,
+		"status --json --upstream":   statusRaw,
 	}}
 	client := NewClient(".", runner)
 
@@ -329,7 +329,7 @@ func TestClientMutationAcceptsStringStatusAfter(t *testing.T) {
 	}
 	want := [][]string{
 		{"pull", "--json", "--status-after"},
-		{"status", "--json"},
+		{"status", "--json", "--upstream"},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
@@ -339,7 +339,7 @@ func TestClientMutationAcceptsStringStatusAfter(t *testing.T) {
 func TestClientMutationRejectsMalformedStructuredStatusAfter(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
 		"pull --json --status-after": []byte(`{"result":{},"status":{"stacks":"bad"}}`),
-		"status --json":              []byte(`{}`),
+		"status --json --upstream":   []byte(`{}`),
 	}}
 	client := NewClient(".", runner)
 
@@ -490,7 +490,7 @@ func TestClientTextCommandSurface(t *testing.T) {
 		{"diff all", "diff --no-tui", func(ctx context.Context, c *Client) (string, error) {
 			return c.Diff(ctx, "")
 		}},
-		{"diff target", "diff a1 --no-tui", func(ctx context.Context, c *Client) (string, error) {
+		{"diff target", "diff --no-tui a1", func(ctx context.Context, c *Client) (string, error) {
 			return c.Diff(ctx, "a1")
 		}},
 		{"pull check", "pull --check", func(ctx context.Context, c *Client) (string, error) {
@@ -597,7 +597,7 @@ func TestClientPushRefreshesWithoutStatusAfter(t *testing.T) {
 	}
 	runner := &fakeRunner{outputs: map[string][]byte{
 		"push feature/ui --skip-force-push-protection": []byte("pushed"),
-		"status --json": statusRaw,
+		"status --json --upstream":                     statusRaw,
 	}}
 	client := NewClient(".", runner)
 
@@ -610,7 +610,7 @@ func TestClientPushRefreshesWithoutStatusAfter(t *testing.T) {
 	}
 	want := [][]string{
 		{"push", "feature/ui", "--skip-force-push-protection"},
-		{"status", "--json"},
+		{"status", "--json", "--upstream"},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
@@ -619,8 +619,8 @@ func TestClientPushRefreshesWithoutStatusAfter(t *testing.T) {
 
 func TestClientParsesCLIError(t *testing.T) {
 	runner := &fakeRunner{
-		outputs: map[string][]byte{"status --json": []byte(`{"error":"setup_required","message":"unable to open database file","hint":"run but setup"}`)},
-		errs:    map[string]error{"status --json": errors.New("exit status 1")},
+		outputs: map[string][]byte{"status --json --upstream": []byte(`{"error":"setup_required","message":"unable to open database file","hint":"run but setup"}`)},
+		errs:    map[string]error{"status --json --upstream": errors.New("exit status 1")},
 	}
 	client := NewClient(".", runner)
 
@@ -642,13 +642,13 @@ func TestClientParsesCLIError(t *testing.T) {
 
 func TestClientParsesMixedCLIErrorOutput(t *testing.T) {
 	runner := &fakeRunner{
-		outputs: map[string][]byte{"status --json": []byte(`{
+		outputs: map[string][]byte{"status --json --upstream": []byte(`{
   "error": "setup_required",
   "message": "No GitButler project found at .",
   "hint": "run ` + "`but setup`" + ` to configure the project"
 }
 Error: Setup required: No GitButler project found at .`)},
-		errs: map[string]error{"status --json": errors.New("exit status 1")},
+		errs: map[string]error{"status --json --upstream": errors.New("exit status 1")},
 	}
 	client := NewClient(".", runner)
 
@@ -672,5 +672,81 @@ func TestParseCommandErrorForMissingBut(t *testing.T) {
 	}
 	if !IsCLINotFound(err) {
 		t.Fatalf("cli-not-found helper missed: %v", err)
+	}
+}
+
+func TestDiffSupportsRemovedNoTUIFlag(t *testing.T) {
+	for _, target := range []string{"", "file-id"} {
+		legacy := strings.TrimSpace("diff --no-tui " + target)
+		current := strings.TrimSpace("diff " + target)
+		runner := &fakeRunner{
+			outputs: map[string][]byte{legacy: []byte("error: unexpected argument '--no-tui' found"), current: []byte("diff contents")},
+			errs:    map[string]error{legacy: errors.New("exit status 2")},
+		}
+		client := NewClient(".", runner)
+		got, err := client.Diff(context.Background(), target)
+		if err != nil || got != "diff contents" || runner.callCount() != 2 {
+			t.Fatalf("diff %q: %q, %v", target, got, err)
+		}
+		if _, err := client.Diff(context.Background(), target); err != nil || runner.callCount() != 3 {
+			t.Fatalf("capability not cached: %v", err)
+		}
+	}
+}
+
+func TestDiffDoesNotRetryOtherFailures(t *testing.T) {
+	runner := &fakeRunner{errs: map[string]error{"diff --no-tui missing": errors.New("unknown target")}}
+	_, err := NewClient(".", runner).Diff(context.Background(), "missing")
+	if err == nil || runner.callCount() != 1 {
+		t.Fatalf("unexpected retry: %v", err)
+	}
+}
+
+func TestExecRunnerSeparatesDiagnostics(t *testing.T) {
+	runner := ExecRunner{Bin: "sh"}
+	t.Setenv("BUT_OUTPUT_FORMAT", "json")
+	out, err := runner.Run(context.Background(), t.TempDir(), "-c", `printf '{"ok":true}'; printf 'warning' >&2; test "$BUT_OUTPUT_FORMAT" = human`)
+	if err != nil || string(out) != `{"ok":true}` {
+		t.Fatalf("output = %q, err = %v", out, err)
+	}
+	out, err = runner.Run(context.Background(), t.TempDir(), "-c", `printf 'failure' >&2; exit 1`)
+	if err == nil || !strings.Contains(string(out), "failure") {
+		t.Fatalf("lost diagnostic: %q, %v", out, err)
+	}
+}
+
+// Used by e2e-local.sh against the but binary on PATH and a disposable workspace.
+func TestCLICompatibility(t *testing.T) {
+	dir := os.Getenv("LAZYBUT_TEST_REPO")
+	if dir == "" {
+		t.Skip("set LAZYBUT_TEST_REPO to run against a real GitButler workspace")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	client := NewClient(dir, nil)
+	status, err := client.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(status.Stacks) == 0 {
+		t.Fatal("expected a workspace stack")
+	}
+	if _, err := client.BranchList(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Diff(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, stack := range status.Stacks {
+		for _, branch := range stack.Branches {
+			if _, err := client.Show(ctx, branch.Name); err != nil {
+				t.Fatal(err)
+			}
+			for _, commit := range branch.Commits {
+				if _, err := client.Diff(ctx, commit.CLIID); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
 	}
 }

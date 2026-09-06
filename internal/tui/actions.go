@@ -6,7 +6,6 @@ func (m Model) availableActions() []action {
 	lane, hasLane := m.selectedLane()
 	item, hasItem := m.selectedContent()
 	isBranch := hasLane && lane.Kind == laneAppliedBranch
-	isAppliedBranch := hasLane && lane.Kind == laneAppliedBranch
 	isChange := hasItem && item.Kind == contentChange && item.ID != ""
 	isCommit := hasItem && item.Kind == contentCommit && item.ID != ""
 
@@ -62,7 +61,7 @@ func (m Model) availableActions() []action {
 			action{ID: actionPRDraft, Key: "T", Label: "set PR draft", ConfirmText: "Mark the selected branch review as draft?"},
 			action{ID: actionPRReady, Key: "W", Label: "set PR ready", ConfirmText: "Mark the selected branch review as ready?"},
 			action{ID: actionCopyPRURL, Key: "ctrl+o", Label: "copy PR URL"},
-			action{ID: actionLand, Key: "ctrl+m", Label: "land branch into target", ConfirmText: "Land selected branch into the target with `but land --yes`?"},
+			action{ID: actionLand, Key: "alt+m", Label: "land branch into target", ConfirmText: "Land selected branch into the target with `but land --yes`?"},
 			action{ID: actionDelete, Key: "D", Label: "delete branch", Dangerous: true, ConfirmText: "Delete this branch?"},
 		)
 		if m.focus == panelLanes && len(m.moveTargetItems(false)) > 0 {
@@ -70,7 +69,7 @@ func (m Model) availableActions() []action {
 		}
 	}
 
-	if isAppliedBranch {
+	if isBranch {
 		actions = append(actions,
 			action{ID: actionAbsorb, Key: "ctrl+a", Label: "absorb changes into commits", ConfirmText: "Run `but absorb`?"},
 			action{ID: actionSnapshot, Key: "s", Label: "oplog snapshot", InputLabel: "snapshot message"},

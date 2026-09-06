@@ -123,7 +123,7 @@ func buildWorkspaceData(status *gitbutler.WorkspaceStatus, branches *gitbutler.B
 		Name:        "unassigned changes",
 		Kind:        laneUnassigned,
 		Applied:     true,
-		ChangeCount: len(status.UnassignedChanges),
+		ChangeCount: len(status.UnassignedChanges) + len(status.ConflictedFiles),
 	})
 
 	applied := map[string]bool{}
@@ -146,11 +146,16 @@ func buildWorkspaceData(status *gitbutler.WorkspaceStatus, branches *gitbutler.B
 				CommitCount:   len(branch.Commits),
 				UpstreamCount: len(branch.UpstreamCommits),
 				PushStatus:    branch.BranchStatus.String(),
-				MergeClean:    &mergeClean,
+			}
+			if branch.MergeStatus != "" {
+				ln.MergeClean = &mergeClean
 			}
 			if branch.CI != nil {
 				ln.CIPresent = true
-				ln.CIConclusion = branch.CI.OverallConclusion.String()
+				ln.CIConclusion = firstNonEmpty(branch.CI.Conclusion.String(), branch.CI.OverallConclusion.String())
+				if branch.CI.Status == "inProgress" && ln.CIConclusion != "failure" {
+					ln.CIConclusion = "pending"
+				}
 				ln.CIPending = len(branch.CI.Pending)
 				ln.CIPassing = len(branch.CI.Passing)
 				ln.CIFailing = len(branch.CI.Failing)
@@ -269,7 +274,11 @@ func (d workspaceData) contentFor(index int) []contentItem {
 	}
 	switch selected.Kind {
 	case laneUnassigned:
-		return changesToContent(d.Status.UnassignedChanges)
+		items := changesToContent(d.Status.UnassignedChanges)
+		for _, path := range d.Status.ConflictedFiles {
+			items = append(items, contentItem{Key: "conflict:" + path, Kind: contentChange, Label: path, Detail: "conflicted — resolve in your editor and mark resolved", Conflicted: true})
+		}
+		return items
 	case laneAppliedBranch:
 		stack, branch, ok := d.findAppliedBranch(selected.Name)
 		if !ok {

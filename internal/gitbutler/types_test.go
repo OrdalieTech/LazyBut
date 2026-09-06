@@ -66,3 +66,18 @@ func TestBranchListUnmarshal(t *testing.T) {
 		t.Fatalf("commits ahead was not parsed")
 	}
 }
+
+func TestCurrentStatusFields(t *testing.T) {
+	var status WorkspaceStatus
+	err := json.Unmarshal([]byte(`{"unassignedChanges":[{"filePath":"stale"}],"uncommittedChanges":[],"conflictedFiles":["conflict.txt"],"stacks":[{"branches":[{"ci":{"status":"inProgress","conclusion":"failure"}}]}]}`), &status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(status.UnassignedChanges) != 0 || len(status.ConflictedFiles) != 1 {
+		t.Fatalf("incorrect changes: %+v", status)
+	}
+	ci := status.Stacks[0].Branches[0].CI
+	if ci.Status != "inProgress" || ci.Conclusion != "failure" {
+		t.Fatalf("incorrect CI: %+v", ci)
+	}
+}
