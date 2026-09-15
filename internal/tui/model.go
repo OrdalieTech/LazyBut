@@ -9,6 +9,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/OrdalieTech/LazyBut/internal/gitbutler"
 )
@@ -273,6 +275,13 @@ type forgeAuthDoneMsg struct {
 }
 
 func Run(client *gitbutler.Client, autoRefresh bool) error {
+	// Full-screen terminal hosts sometimes export NO_COLOR for captured command
+	// output even though their interactive PTY supports ANSI colors. LazyBut's
+	// palette only uses 256-color values, so select that profile explicitly for
+	// the interactive TUI instead of letting the inherited environment turn all
+	// Lip Gloss styles into plain text.
+	lipgloss.SetColorProfile(termenv.ANSI256)
+
 	model := newModel(client)
 	model.autoRefreshEnabled = autoRefresh
 	_, err := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
