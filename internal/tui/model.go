@@ -277,9 +277,10 @@ type forgeAuthDoneMsg struct {
 func Run(client *gitbutler.Client, autoRefresh bool) error {
 	// Full-screen terminal hosts sometimes export NO_COLOR for captured command
 	// output even though their interactive PTY supports ANSI colors. LazyBut's
-	// palette only uses 256-color values, so select that profile explicitly for
+	// adaptive palette degrades cleanly to 256 colors, so select that profile for
 	// the interactive TUI instead of letting the inherited environment turn all
-	// Lip Gloss styles into plain text.
+	// Lip Gloss styles into plain text. Background detection remains independent
+	// and selects the light or dark side of the palette.
 	lipgloss.SetColorProfile(termenv.ANSI256)
 
 	model := newModel(client)

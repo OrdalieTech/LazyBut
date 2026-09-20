@@ -836,10 +836,15 @@ func TestDiffLineClassification(t *testing.T) {
 	}{
 		// Expected fragments are derived from the styles themselves so palette
 		// tweaks don't require hand-editing color codes here.
-		{"added", "      22│+	orchestratorV4 \"foo\"", []string{ansiPrefix(styleDiffAdd)}},
-		{"removed", "      22│-	old line", []string{ansiPrefix(styleDiffRem)}},
-		{"context", "   19 19│ 	keep line", []string{ansiPrefix(styleDiffGutter)}}, // gutter is dim
-		{"header", "x9 apps/api/main.go│", []string{ansiPrefix(styleDiffHeader)}},  // header is bold accent
+		{"gitbutler added", "  ┊ 22 │ +\torchestratorV4 \"foo\"", []string{ansiPrefix(styleDiffGutter), ansiPrefix(styleDiffAdd)}},
+		{"gitbutler removed", "22 ┊    │ -\told line", []string{ansiPrefix(styleDiffGutter), ansiPrefix(styleDiffRem)}},
+		{"gitbutler context", "19 ┊ 19 │  \tkeep line", []string{ansiPrefix(styleDiffGutter)}},
+		{"legacy added", "      22│+\torchestratorV4 \"foo\"", []string{ansiPrefix(styleDiffAdd)}},
+		{"file header", "x9 apps/api/main.go│", []string{ansiPrefix(styleDiffHeader)}},
+		{"unified added", "+new line", []string{ansiPrefix(styleDiffAdd)}},
+		{"unified removed", "-old line", []string{ansiPrefix(styleDiffRem)}},
+		{"unified hunk", "@@ -5,7 +5,7 @@", []string{ansiPrefix(styleDiffHeader)}},
+		{"unified new file marker", "+++ b/main.go", []string{ansiPrefix(styleDiffHeader)}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -850,6 +855,36 @@ func TestDiffLineClassification(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPaletteAdaptsToTerminalBackground(t *testing.T) {
+	original := lipgloss.HasDarkBackground()
+	defer lipgloss.SetHasDarkBackground(original)
+
+	styles := []struct {
+		name  string
+		style lipgloss.Style
+	}{
+		{name: "accent", style: styleAccent},
+		{name: "muted", style: styleDim},
+		{name: "addition", style: styleDiffAdd},
+		{name: "removal", style: styleDiffRem},
+		{name: "selection", style: styleSelectedRow},
+	}
+
+	lipgloss.SetHasDarkBackground(false)
+	light := make(map[string]string, len(styles))
+	for _, tt := range styles {
+		light[tt.name] = ansiPrefix(tt.style)
+	}
+
+	lipgloss.SetHasDarkBackground(true)
+	for _, tt := range styles {
+		dark := ansiPrefix(tt.style)
+		if light[tt.name] == dark {
+			t.Errorf("%s style does not adapt: light and dark both use %q", tt.name, dark)
+		}
 	}
 }
 
@@ -865,6 +900,9 @@ func TestBoxDecorationStripping(t *testing.T) {
 	}
 	if isBoxDecoration("x9 apps/api/main.go│") {
 		t.Fatalf("file header line should NOT be detected as decoration")
+	}
+	if !looksLikeDiffGutter("3 ┊   ") || !looksLikeDiffGutter("  ┊ 4 ") {
+		t.Fatal("GitButler's old/new line-number gutters should be detected")
 	}
 }
 

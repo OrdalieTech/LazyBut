@@ -27,7 +27,7 @@ GitButler behavior to the official `but` CLI instead of reimplementing Git logic
 - GitButler CLI 0.22 or newer available as `but` (tested with 0.22.0 and 0.22.3; the installer can install it for you)
 - A Git repository; LazyBut can offer to run `but setup` on first start
 - A terminal with color support; mouse support is optional but enabled when available
-- Go 1.26+ only if building from source
+- Go 1.27.1+ only if building from source
 
 ## Install
 

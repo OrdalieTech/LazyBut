@@ -28,28 +28,26 @@ func hyperlink(text, url string) string {
 var (
 	border = lipgloss.RoundedBorder()
 
-	// Git-inspired palette: green = added/synced, red = removed/force/conflict,
-	// yellow = modified/ahead/warn, cyan = info/accent, purple = merged/integrated.
-	//
-	// Values are mid-saturation 256-colors picked to keep adequate contrast on
-	// BOTH dark and light terminals — pale tints (high-number greys, light
-	// yellows) vanish on white backgrounds, so they're avoided for anything
-	// load-bearing.
-	colAccent   = lipgloss.Color("38") // teal-cyan — primary accent / titles
-	colAccent2  = lipgloss.Color("31") // deeper teal — focused border
-	colMuted    = lipgloss.Color("244")
-	colFaint    = lipgloss.Color("240") // border of non-focused boxes (recedes)
-	colDeep     = lipgloss.Color("237") // very dim separators
-	colOk       = lipgloss.Color("71")  // git green (added)
-	colWarn     = lipgloss.Color("178") // git amber (modified/ahead) — readable on white
-	colErr      = lipgloss.Color("167") // git red (removed / force / conflict)
-	colPurple   = lipgloss.Color("99")  // merged / integrated
-	colMagenta  = lipgloss.Color("169") // untracked / renamed
-	colLoad     = lipgloss.Color("208") // loading / working — vivid amber, pops on light + dark
-	colSelectBg = lipgloss.Color("24")  // focused selection bar (blue)
-	colSelectFg = lipgloss.Color("231") // text on the focused selection bar
-	colBlurBg   = lipgloss.Color("238") // unfocused panel's cursor row (subtle)
-	colFg       = lipgloss.Color("252")
+	// Git-inspired semantic palette. AdaptiveColor asks Lip Gloss for the
+	// terminal's system background once, then selects the high-contrast light or
+	// dark value at render time. Ordinary body text deliberately keeps the
+	// terminal's default foreground so custom system themes remain respected.
+	colAccent   = lipgloss.AdaptiveColor{Light: "#006D9C", Dark: "#00AFD7"} // info / titles
+	colAccent2  = lipgloss.AdaptiveColor{Light: "#005F87", Dark: "#0087AF"} // focused border
+	colMuted    = lipgloss.AdaptiveColor{Light: "#666666", Dark: "#8A8A8A"}
+	colFaint    = lipgloss.AdaptiveColor{Light: "#A3A3A3", Dark: "#585858"} // inactive border
+	colDeep     = lipgloss.AdaptiveColor{Light: "#D0D0D0", Dark: "#3A3A3A"} // separators
+	colOk       = lipgloss.AdaptiveColor{Light: "#1A7F37", Dark: "#73C991"} // added / synced
+	colWarn     = lipgloss.AdaptiveColor{Light: "#9A6700", Dark: "#D7AF00"} // modified / ahead
+	colErr      = lipgloss.AdaptiveColor{Light: "#CF222E", Dark: "#F07178"} // removed / conflict
+	colPurple   = lipgloss.AdaptiveColor{Light: "#6F42C1", Dark: "#A78BFA"} // merged
+	colMagenta  = lipgloss.AdaptiveColor{Light: "#A12568", Dark: "#E06CBA"} // untracked
+	colLoad     = lipgloss.AdaptiveColor{Light: "#B45309", Dark: "#FF9E45"} // loading / working
+	colSelectBg = lipgloss.AdaptiveColor{Light: "#0969DA", Dark: "#0E639C"}
+	colSelectFg = lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#FFFFFF"}
+	colBlurBg   = lipgloss.AdaptiveColor{Light: "#E6E8EB", Dark: "#34383D"}
+	colDiffAdd  = lipgloss.AdaptiveColor{Light: "#1A7F37", Dark: "#7EE787"}
+	colDiffRem  = lipgloss.AdaptiveColor{Light: "#CF222E", Dark: "#FF7B72"}
 
 	styleDim    = lipgloss.NewStyle().Foreground(colMuted)
 	styleFaint  = lipgloss.NewStyle().Foreground(colFaint)
@@ -82,7 +80,7 @@ var (
 	// bar (LazyGit-style), while other panels show their cursor as a muted grey
 	// band — so "where am I" is unambiguous across the kanban columns.
 	styleSelectedRow     = lipgloss.NewStyle().Background(colSelectBg).Foreground(colSelectFg).Bold(true)
-	styleSelectedRowBlur = lipgloss.NewStyle().Background(colBlurBg).Foreground(colFg)
+	styleSelectedRowBlur = lipgloss.NewStyle().Background(colBlurBg)
 	styleMarked          = lipgloss.NewStyle().Foreground(colWarn).Bold(true)
 
 	styleBadgeZZ       = lipgloss.NewStyle().Foreground(colWarn).Bold(true)
@@ -104,15 +102,13 @@ var (
 	styleNodeFile     = lipgloss.NewStyle().Foreground(colAccent2).Bold(true)
 	styleIDDim        = lipgloss.NewStyle().Foreground(colMuted)
 	stylePathDim      = lipgloss.NewStyle().Foreground(colMuted)
-	styleFileName     = lipgloss.NewStyle().Foreground(colFg).Bold(true)
+	styleFileName     = lipgloss.NewStyle().Bold(true)
 
 	// Diff styling.
-	styleDiffAdd    = lipgloss.NewStyle().Foreground(lipgloss.Color("114"))                                  // green
-	styleDiffRem    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))                                  // red
-	styleDiffAddBg  = lipgloss.NewStyle().Foreground(lipgloss.Color("120")).Background(lipgloss.Color("22")) // bright green, dark green bg
-	styleDiffRemBg  = lipgloss.NewStyle().Foreground(lipgloss.Color("210")).Background(lipgloss.Color("52")) // bright red, dark red bg
-	styleDiffCtx    = lipgloss.NewStyle().Foreground(colFg)
-	styleDiffGutter = lipgloss.NewStyle().Foreground(colFaint)
+	styleDiffAdd    = lipgloss.NewStyle().Foreground(colDiffAdd)
+	styleDiffRem    = lipgloss.NewStyle().Foreground(colDiffRem)
+	styleDiffCtx    = lipgloss.NewStyle() // terminal-default foreground
+	styleDiffGutter = lipgloss.NewStyle().Foreground(colMuted)
 	styleDiffHeader = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
 )
 
@@ -799,9 +795,9 @@ func displayItemID(item contentItem) string {
 }
 
 // changeTypeColor maps a git change-type string (added/modified/deleted/…)
-// to the canonical git-status color. Returns an empty Color sentinel for
-// unknown types so callers can fall back to a neutral style.
-func changeTypeColor(detail string) lipgloss.Color {
+// to the canonical adaptive git-status color. Nil lets callers fall back to a
+// neutral style for unknown types.
+func changeTypeColor(detail string) lipgloss.TerminalColor {
 	switch strings.ToLower(detail) {
 	case "added", "add", "a", "new":
 		return colOk
@@ -816,25 +812,25 @@ func changeTypeColor(detail string) lipgloss.Color {
 	case "conflicted", "conflict":
 		return colErr
 	}
-	return ""
+	return nil
 }
 
 func fileChangeStyle(detail string) lipgloss.Style {
-	if c := changeTypeColor(detail); c != "" {
+	if c := changeTypeColor(detail); c != nil {
 		return lipgloss.NewStyle().Foreground(c).Bold(true)
 	}
 	return styleNodeFile
 }
 
 func fileNameStyle(detail string) lipgloss.Style {
-	if c := changeTypeColor(detail); c != "" {
+	if c := changeTypeColor(detail); c != nil {
 		return lipgloss.NewStyle().Foreground(c).Bold(true)
 	}
 	return styleFileName
 }
 
 func fileIDStyle(detail string) lipgloss.Style {
-	if c := changeTypeColor(detail); c != "" {
+	if c := changeTypeColor(detail); c != nil {
 		return lipgloss.NewStyle().Foreground(c)
 	}
 	return styleIDDim
@@ -1721,19 +1717,20 @@ func isBoxDecoration(line string) bool {
 	return true
 }
 
-// styleDiffLine applies diff colors to a single line of `but diff` output.
+// styleDiffLine applies diff colors to a single line of `but diff` output or a
+// raw unified Git diff.
 //
-//	<spaces><digits>?<spaces><digits>│ <ctx>     → context
-//	<spaces><digits>│+<text>                    → addition
-//	<digits><spaces>│-<text>                    → removal
-//	<text>│                                     → file header (no diff gutter)
+//	<old> ┊ <new> │  <ctx>                      → context
+//	<old> ┊       │ -<text>                     → removal
+//	      ┊ <new> │ +<text>                     → addition
+//	<text>│                                      → file header (no diff gutter)
 func styleDiffLine(line string) string {
 	if line == "" {
 		return line
 	}
 	pipeIdx := strings.Index(line, "│")
 	if pipeIdx < 0 {
-		return styleDiffCtx.Render(line)
+		return styleUnifiedDiffLine(line)
 	}
 	gutterRaw := line[:pipeIdx]
 	rest := line[pipeIdx+len("│"):]
@@ -1750,7 +1747,7 @@ func styleDiffLine(line string) string {
 	if rest == "" {
 		return gutter
 	}
-	switch rest[0] {
+	switch firstNonSpaceByte(rest) {
 	case '+':
 		return gutter + styleDiffAdd.Render(rest)
 	case '-':
@@ -1758,6 +1755,34 @@ func styleDiffLine(line string) string {
 	default:
 		return gutter + styleDiffCtx.Render(rest)
 	}
+}
+
+// styleUnifiedDiffLine covers the plain output returned by the git fallback.
+// File markers must be checked before +/- content because they use the same
+// prefix in unified diffs.
+func styleUnifiedDiffLine(line string) string {
+	switch {
+	case strings.HasPrefix(line, "diff --git "),
+		strings.HasPrefix(line, "index "),
+		strings.HasPrefix(line, "@@"),
+		strings.HasPrefix(line, "+++ "),
+		strings.HasPrefix(line, "--- "):
+		return styleDiffHeader.Render(line)
+	case strings.HasPrefix(line, "+"):
+		return styleDiffAdd.Render(line)
+	case strings.HasPrefix(line, "-"):
+		return styleDiffRem.Render(line)
+	default:
+		return styleDiffCtx.Render(line)
+	}
+}
+
+func firstNonSpaceByte(s string) byte {
+	s = strings.TrimLeft(s, " \t")
+	if s == "" {
+		return 0
+	}
+	return s[0]
 }
 
 func looksLikeDiffGutter(s string) bool {
@@ -1768,6 +1793,11 @@ func looksLikeDiffGutter(s string) bool {
 	for _, r := range s {
 		if unicode.IsDigit(r) {
 			hasDigit = true
+			continue
+		}
+		// Current GitButler releases separate old and new line numbers with
+		// this dashed vertical bar. Older releases used whitespace only.
+		if r == '┊' {
 			continue
 		}
 		if !unicode.IsSpace(r) {
