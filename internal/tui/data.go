@@ -129,10 +129,9 @@ func buildWorkspaceData(status *gitbutler.WorkspaceStatus, branches *gitbutler.B
 	applied := map[string]bool{}
 	for _, stack := range status.Stacks {
 		for branchIdx, branch := range stack.Branches {
-			key := branch.CLIID
-			if key == "" {
-				key = branch.Name
-			}
+			// Names are stable across refreshes; branch CLI IDs are not. The
+			// prefix keeps a branch literally named zz off the zz lane's key.
+			key := "branch:" + firstNonEmpty(branch.Name, branch.CLIID)
 			applied[branch.Name] = true
 			mergeClean := branch.MergeStatus.String() != "conflicted"
 			ln := lane{

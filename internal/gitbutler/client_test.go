@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -77,7 +79,7 @@ func TestClientStatusUsesJSON(t *testing.T) {
 
 func TestClientStatusReconcilesStaleGitHubPRAndCachesResult(t *testing.T) {
 	statusRaw := []byte(`{
-		"unassignedChanges": [],
+		"uncommittedChanges": [],
 		"stacks": [{
 			"cliId": "s1",
 			"assignedChanges": [],
@@ -104,6 +106,11 @@ func TestClientStatusReconcilesStaleGitHubPRAndCachesResult(t *testing.T) {
 	client := NewClient(".", butRunner)
 	client.GHRunner = ghRunner
 
+	// The first load never waits on GitHub; the PRs land for the next one.
+	if _, err := client.Status(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitForGitHubRefresh(t, client)
 	status, err := client.Status(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -142,6 +149,10 @@ func TestClientBranchListReconcilesStaleGitHubPR(t *testing.T) {
 	client := NewClient(".", butRunner)
 	client.GHRunner = ghRunner
 
+	if _, err := client.BranchList(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitForGitHubRefresh(t, client)
 	branches, err := client.BranchList(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +167,7 @@ const testGHPRListKey = "pr list --state all --json number,url,headRefName,state
 
 func testGitHubEnrichableStatusJSON() []byte {
 	return []byte(`{
-		"unassignedChanges": [],
+		"uncommittedChanges": [],
 		"stacks": [{
 			"cliId": "s1",
 			"assignedChanges": [],
@@ -312,8 +323,6 @@ func TestClientMutationAcceptsStringStatusAfter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrapped := append([]byte(`{"result":{},"status":`), statusRaw...)
-	wrapped = append(wrapped, '}')
 	runner := &fakeRunner{outputs: map[string][]byte{
 		"pull --json --status-after": []byte(`{"result":{},"status":"updated"}`),
 		"status --json --upstream":   statusRaw,
@@ -333,6 +342,42 @@ func TestClientMutationAcceptsStringStatusAfter(t *testing.T) {
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
+// `but land` prints nothing with --json, and a failed status-after arrives as
+// a `status_error` string; both are successful mutations that need a reload.
+func TestClientMutationReloadsStatusWithoutStructuredStatusAfter(t *testing.T) {
+	statusRaw, err := os.ReadFile("testdata/status.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"land feature/ui --yes --json --status-after": nil,
+		"pull --json --status-after":                  []byte(`{"result":{},"status_error":"database is locked"}`),
+		"status --json --upstream":                    statusRaw,
+	}}
+	client := NewClient(".", runner)
+
+	for name, mutate := range map[string]func() (*WorkspaceStatus, error){
+		"empty output": func() (*WorkspaceStatus, error) { return client.Land(context.Background(), "feature/ui") },
+		"status_error": func() (*WorkspaceStatus, error) { return client.Pull(context.Background()) },
+	} {
+		status, err := mutate()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if status.Stacks[0].Branches[0].Name != "feature/ui" {
+			t.Fatalf("%s: unexpected status: %#v", name, status.Stacks)
+		}
+	}
+}
+
+// `but discard` with no target discards every uncommitted change.
+func TestClientDiscardRefusesWithoutTargets(t *testing.T) {
+	runner := &fakeRunner{}
+	if _, err := NewClient(".", runner).Discard(context.Background(), ""); err == nil || runner.callCount() != 0 {
+		t.Fatalf("err = %v, calls = %d", err, runner.callCount())
 	}
 }
 
@@ -716,37 +761,157 @@ func TestExecRunnerSeparatesDiagnostics(t *testing.T) {
 }
 
 // Used by e2e-local.sh against the but binary on PATH and a disposable workspace.
-func TestCLICompatibility(t *testing.T) {
-	dir := os.Getenv("LAZYBUT_TEST_REPO")
-	if dir == "" {
-		t.Skip("set LAZYBUT_TEST_REPO to run against a real GitButler workspace")
+// TestClientAgainstRealGitButler drives every Client mutation through the
+// installed `but` in a disposable repository, so a CLI release that renames a
+// flag or changes its output fails here rather than in the TUI.
+func TestClientAgainstRealGitButler(t *testing.T) {
+	if os.Getenv("LAZYBUT_E2E") == "" {
+		t.Skip("set LAZYBUT_E2E=1 to run against the installed `but` (scripts/e2e-local.sh does)")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	client := NewClient(dir, nil)
-	status, err := client.Status(ctx)
-	if err != nil {
-		t.Fatal(err)
+	root := t.TempDir()
+	remote, dir, clone := filepath.Join(root, "remote.git"), filepath.Join(root, "repo"), filepath.Join(root, "clone")
+	git := func(args ...string) {
+		t.Helper()
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
 	}
-	if len(status.Stacks) == 0 {
-		t.Fatal("expected a workspace stack")
+	write := func(base, name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(base, name), []byte(body+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := client.BranchList(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := client.Diff(ctx, ""); err != nil {
-		t.Fatal(err)
-	}
-	for _, stack := range status.Stacks {
-		for _, branch := range stack.Branches {
-			if _, err := client.Show(ctx, branch.Name); err != nil {
-				t.Fatal(err)
+	git("init", "-q", "--bare", "-b", "main", remote)
+	git("init", "-q", "-b", "main", dir)
+	git("-C", dir, "config", "user.name", "LazyBut E2E")
+	git("-C", dir, "config", "user.email", "lazybut-e2e@example.test")
+	git("-C", dir, "remote", "add", "origin", remote)
+	write(dir, "README.md", "base")
+	git("-C", dir, "add", ".")
+	git("-C", dir, "commit", "-qm", "base")
+	git("-C", dir, "push", "-qu", "origin", "main")
+
+	c := NewClient(dir, nil)
+	t.Cleanup(func() { _ = exec.Command(c.Bin(), "-C", dir, "teardown").Run() })
+	var status *WorkspaceStatus
+	// step("x")(c.X(ctx)) fails the test on error and keeps the new status.
+	step := func(name string) func(*WorkspaceStatus, error) {
+		return func(next *WorkspaceStatus, err error) {
+			t.Helper()
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
 			}
-			for _, commit := range branch.Commits {
-				if _, err := client.Diff(ctx, commit.CLIID); err != nil {
-					t.Fatal(err)
-				}
+			status = next
+		}
+	}
+	text := func(name string) func(string, error) {
+		return func(_ string, err error) {
+			t.Helper()
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
 			}
 		}
 	}
+	change := func(path string) string {
+		t.Helper()
+		for _, ch := range status.UnassignedChanges {
+			if ch.FilePath == path {
+				return ch.CLIID
+			}
+		}
+		t.Fatalf("%s is not an uncommitted change: %+v", path, status.UnassignedChanges)
+		return ""
+	}
+	commits := func(branch string) []Commit {
+		t.Helper()
+		for _, stack := range status.Stacks {
+			for _, b := range stack.Branches {
+				if b.Name == branch {
+					return b.Commits
+				}
+			}
+		}
+		t.Fatalf("branch %s is not in the workspace", branch)
+		return nil
+	}
+
+	// Older CLIs need `setup`; newer ones set repositories up on first use and
+	// reject it, which is fine as long as status loads afterwards.
+	_, _ = c.Setup(ctx, false)
+	write(dir, "a.txt", "a")
+	write(dir, "b.txt", "b")
+	step("status")(c.Status(ctx))
+	step("commit")(c.Commit(ctx, "e2e-a", "add a", []string{change("a.txt")}))
+	step("stacked branch")(c.NewBranch(ctx, "e2e-child", "e2e-a"))
+	step("commit on stacked branch")(c.Commit(ctx, "e2e-child", "add b", []string{change("b.txt")}))
+	step("unstack")(c.MoveBranch(ctx, "e2e-child", "zz"))
+	step("restack")(c.MoveBranch(ctx, "e2e-child", "e2e-a"))
+
+	write(dir, "c.txt", "c")
+	step("status")(c.Status(ctx))
+	step("amend")(c.Amend(ctx, commits("e2e-a")[0].CLIID, change("c.txt")))
+	write(dir, "d.txt", "d")
+	step("status")(c.Status(ctx))
+	step("second commit")(c.Commit(ctx, "e2e-a", "add d", []string{change("d.txt")}))
+	a := commits("e2e-a")
+	step("squash")(c.Squash(ctx, a[0].CLIID, a[1].CLIID))
+	step("reword")(c.Reword(ctx, commits("e2e-a")[0].CLIID, "add a, c and d"))
+	write(dir, "a.txt", "a, absorbed")
+	step("absorb")(c.Absorb(ctx))
+	step("move commit")(c.MoveCommit(ctx, commits("e2e-child")[0].CLIID, "e2e-a"))
+	step("uncommit")(c.Uncommit(ctx, commits("e2e-a")[0].CLIID))
+	step("recommit")(c.Commit(ctx, "e2e-child", "recommit b", []string{change("b.txt")}))
+
+	write(dir, "e.txt", "e")
+	write(dir, "f.txt", "f")
+	step("status")(c.Status(ctx))
+	step("discard")(c.Discard(ctx, change("e.txt"), change("f.txt")))
+	for _, name := range []string{"e.txt", "f.txt"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("discard kept %s: %v", name, err)
+		}
+	}
+
+	text("push dry-run")(c.PushDryRun(ctx, "e2e-child"))
+	step("push")(c.Push(ctx, "e2e-child", false))
+	git("--git-dir", remote, "rev-parse", "-q", "--verify", "refs/heads/e2e-child")
+
+	git("clone", "-q", remote, clone)
+	write(clone, "upstream.txt", "upstream")
+	git("-C", clone, "add", ".")
+	git("-C", clone, "-c", "user.name=Upstream", "-c", "user.email=upstream@example.test", "commit", "-qm", "upstream")
+	git("-C", clone, "push", "-q", "origin", "main")
+	if err := c.GitFetch(ctx); err != nil {
+		t.Fatal(err)
+	}
+	text("pull check")(c.PullCheck(ctx))
+	step("pull")(c.Pull(ctx))
+	step("undo")(c.Undo(ctx))
+	step("pull again")(c.Pull(ctx))
+
+	text("snapshot")(c.OplogSnapshot(ctx, "lazybut e2e"))
+	if entries, err := c.OplogList(ctx); err != nil || len(entries) == 0 {
+		t.Fatalf("oplog list: %d entries, %v", len(entries), err)
+	}
+	text("clean dry-run")(c.CleanDryRun(ctx))
+	step("clean")(c.Clean(ctx))
+	text("diff")(c.Diff(ctx, ""))
+	text("show")(c.Show(ctx, "e2e-a"))
+	if _, err := c.BranchList(ctx); err != nil {
+		t.Fatalf("branch list: %v", err)
+	}
+
+	step("empty branch")(c.NewBranch(ctx, "e2e-empty", ""))
+	step("unapply")(c.Unapply(ctx, "e2e-empty"))
+	step("apply")(c.Apply(ctx, "e2e-empty"))
+	step("delete branch")(c.DeleteBranch(ctx, "e2e-empty"))
+
+	write(dir, "land.txt", "land")
+	step("status")(c.Status(ctx))
+	step("commit to land")(c.Commit(ctx, "e2e-land", "land", []string{change("land.txt")}))
+	step("land")(c.Land(ctx, "e2e-land"))
+	git("--git-dir", remote, "cat-file", "-e", "main:land.txt")
 }

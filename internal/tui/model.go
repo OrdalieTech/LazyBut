@@ -148,6 +148,7 @@ type Model struct {
 	previewRowsReady bool
 	previewRowsDiff  bool
 	previewExpanded  bool // = toggles: preview takes ~60% of the body instead of a strip
+	previewStale     bool // new data arrived; reload the shown preview in place
 	// previewSeq guards the navigation debounce: each cursor move bumps it, so
 	// only the tick from the resting row still matches and spawns a subprocess.
 	previewSeq int
@@ -483,6 +484,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setToast("no upstream update", toastInfo)
 			return m.withPreview()
 		}
+		if m.mode != modeNormal {
+			return m, nil
+		}
 		m.confirm = confirmState{Action: action{ID: actionPull, Key: "U", Label: "update from upstream", ConfirmText: m.upstreamUpdateConfirmText()}}
 		m.mode = modeConfirm
 		return m, nil
@@ -490,6 +494,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m = m.stopLoading()
 		m.err = nil
 		if msg.err == nil && msg.status != nil {
+			if m.mode == modeNormal {
+				m.selected = map[string]bool{}
+				m.rangeAnchor = -1
+			}
 			m = m.replaceData(msg.status, m.data.Branches)
 			toastText, kind := m.mutationToast(msg.label, msg.status)
 			m.setToast(toastText, kind)
@@ -507,7 +515,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m = m.replaceData(m.data.Status, msg.branches)
-		if msg.openPicker {
+		if msg.openPicker && m.mode == modeNormal {
 			return m.openBranchPicker()
 		}
 		return m, nil
@@ -546,13 +554,16 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.autoRefreshCycle++
 		// Reload the branch list on the first cycle after startup (it is never
 		// loaded eagerly) and every ~30s after, so PR metadata and remote
-		// ahead/behind state stay in sync without user action.
-		branches := m.data.Branches == nil || m.autoRefreshCycle%branchRefreshEvery == 0
+		// ahead/behind state stay in sync without user action. A failed load
+		// waits for the next slow cycle instead of fetching again every 3s.
+		branches := m.autoRefreshCycle == 1 || m.autoRefreshCycle%branchRefreshEvery == 0
 		m, refreshCmd := m.requestAutoRefresh(branches)
 		return m, tea.Batch(autoRefreshTickCmd(), refreshCmd)
 	case autoRefreshMsg:
 		m.autoRefreshInFlight = false
-		if m.loading {
+		// Dialogs act on the selection when accepted, so a refresh that lands
+		// while one is open must not move the cursor under it.
+		if m.loading || m.mode != modeNormal {
 			m.autoRefreshPending = false
 			m.autoRefreshPendingBranches = false
 			return m, nil
@@ -565,6 +576,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				branches = msg.branches
 			}
 			m = m.replaceData(msg.status, branches)
+			m.err = nil
 			var previewCmd tea.Cmd
 			m, previewCmd = m.withPreview()
 			cmds = append(cmds, previewCmd)
@@ -650,6 +662,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if len(items) == 0 {
 			m.setToast("no oplog entries to restore", toastInfo)
+			return m, nil
+		}
+		if m.mode != modeNormal {
 			return m, nil
 		}
 		m.targetPicker = targetPickerState{
@@ -1071,7 +1086,7 @@ func (m Model) handleUpstreamConfirmKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleConfirmMouse(mouse tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.confirm.Action.ID != actionPull {
 		if mouse.Button == tea.MouseButtonLeft && mouse.Action == tea.MouseActionPress {
-			confirm, cancel := m.genericConfirmFooterAt(mouse.X, mouse.Y)
+			confirm, cancel := m.confirmFooterAt(mouse.X, mouse.Y)
 			if confirm {
 				return m.acceptConfirm()
 			}
@@ -1099,34 +1114,39 @@ func (m Model) handleConfirmMouse(mouse tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.confirm.Cursor = row
 			return m, nil
 		}
-		if mouse.Action == tea.MouseActionPress && m.isUpstreamConfirmFooter(mouse.X, mouse.Y) {
-			if mouse.X < m.width/3 {
-				m.mode = modeNormal
-				m.confirm = confirmState{}
-				return m, nil
+		if mouse.Action == tea.MouseActionPress {
+			confirm, cancel := m.confirmFooterAt(mouse.X, mouse.Y)
+			if confirm {
+				return m.acceptConfirm()
 			}
-			action := m.confirm.Action
-			input := m.confirm.Input
-			m.mode = modeNormal
-			m.confirm = confirmState{}
-			return m.execute(action, input)
+			if cancel {
+				return m.cancelConfirm()
+			}
 		}
 	}
 	return m, nil
 }
 
-func (m Model) genericConfirmFooterAt(x, y int) (confirm bool, cancel bool) {
-	startX, startY, width, height := overlayBounds(m.width, m.height, m.renderConfirm())
-	if x < startX || x >= startX+width || y < startY || y >= startY+height {
+// confirmFooterAt maps a click onto the rendered footer hints. Only the first
+// (accept) and last (cancel) hints are targets; gaps and other rows are not.
+func (m Model) confirmFooterAt(x, y int) (confirm bool, cancel bool) {
+	content := m.renderConfirm()
+	startX, startY, _, _ := overlayBounds(m.width, m.height, content)
+	// The footer sits above the bottom padding and border; a modal clipped
+	// by a short terminal puts it off screen, so no row matches.
+	if y != startY+len(splitLines(content))-3 {
 		return false, false
 	}
-	if y < startY+height-4 {
-		return false, false
+	hints := m.confirmFooterHints()
+	col := startX + 3 // left border + padding
+	for idx, hint := range hints {
+		w := lipgloss.Width(hint)
+		if x >= col && x < col+w {
+			return idx == 0, idx == len(hints)-1
+		}
+		col += w + 3
 	}
-	if x < startX+width/2 {
-		return true, false
-	}
-	return false, true
+	return false, false
 }
 
 func (m Model) handlePaletteKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1642,13 +1662,13 @@ func (a action) matches(key string) bool {
 	return false
 }
 
-func (m Model) actionByID(id actionID) action {
+func (m Model) actionByID(id actionID) (action, bool) {
 	for _, action := range m.availableActions() {
 		if action.ID == id {
-			return action
+			return action, true
 		}
 	}
-	return action{ID: id}
+	return action{ID: id}, false
 }
 
 func (m Model) execute(action action, input string) (tea.Model, tea.Cmd) {
@@ -1710,7 +1730,7 @@ func (m Model) execute(action action, input string) (tea.Model, tea.Cmd) {
 		})
 	case actionDiscard:
 		return m.startLoading("discarding"), m.mutationCmd("discarded", func() (*gitbutler.WorkspaceStatus, error) {
-			return m.client.Discard(ctx, firstNonEmpty(first(changeIDs), selectedContent.ID))
+			return m.client.Discard(ctx, changeIDs...)
 		})
 	case actionAmend:
 		return m.startLoading("amending"), m.mutationCmd("amended", func() (*gitbutler.WorkspaceStatus, error) {
@@ -2050,7 +2070,12 @@ func (m Model) withPreview() (Model, tea.Cmd) {
 		return m, nil
 	}
 	if target == m.previewTarget {
-		return m, nil
+		if !m.previewStale {
+			return m, nil
+		}
+		// Same row after a refresh: keep the body and scroll, reload behind it.
+		m.previewStale = false
+		return m, m.previewCmdFor(target)
 	}
 	m.setPreview(target, "", nil)
 	m.previewScroll = 0
@@ -2085,6 +2110,7 @@ func (m *Model) setPreview(target, body string, err error) {
 	// Moving to a different target abandons any pending enter-to-inspect.
 	if target != m.previewTarget {
 		m.diffPending = false
+		m.previewStale = false
 	}
 	m.previewTarget = target
 	m.preview = body
@@ -2360,8 +2386,12 @@ func (m Model) replaceData(status *gitbutler.WorkspaceStatus, branches *gitbutle
 	// New workspace data invalidates every cached diff/show body.
 	m.previewCache = nil
 	m.previewSeq++
-	m.setPreview("", "", nil)
 	m.restoreCursors(laneKey, contentID)
+	if m.previewTarget != "" && m.previewTarget == m.previewSelectionTarget() {
+		m.previewStale = true
+	} else {
+		m.setPreview("", "", nil)
+	}
 	return m
 }
 
@@ -2558,18 +2588,29 @@ func (m Model) handleDiffKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+d":
 		m.diffCursor = min(len(lines)-1, m.diffCursor+5)
 	case "c":
-		if item, ok := m.selectedContent(); ok && item.Kind == contentChange {
+		if a, ok := m.actionByID(actionCommit); ok {
 			m.mode = modeNormal
-			return m.startAction(m.actionByID(actionCommit))
+			return m.startAction(a)
 		}
 	case "d":
-		// Discard the file change.
-		if item, ok := m.selectedContent(); ok && item.Kind == contentChange {
+		if a, ok := m.actionByID(actionDiscard); ok {
 			m.mode = modeNormal
-			return m.startAction(m.actionByID(actionDiscard))
+			return m.startAction(a)
 		}
 	}
+	m.diffScroll = m.diffWindowScroll(len(lines))
 	return m, nil
+}
+
+// diffWindowScroll returns the body scroll offset that keeps the diff cursor
+// in view; renderDiffView and mouse hit-testing both rely on it.
+func (m Model) diffWindowScroll(total int) int {
+	bodyH := max(1, contentHeight(m.height)-2) // header + footer
+	scroll := min(m.diffScroll, m.diffCursor)
+	if m.diffCursor >= scroll+bodyH {
+		scroll = m.diffCursor - bodyH + 1
+	}
+	return max(0, min(scroll, total-bodyH))
 }
 
 // handleDiffMouse handles mouse events in the full-screen diff view. Wheel
@@ -2584,9 +2625,9 @@ func (m Model) handleDiffMouse(mouse tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.MouseButtonWheelDown:
-		maxScroll := max(0, len(lines)-1)
-		m.diffScroll = min(maxScroll, m.diffScroll+3)
-		m.diffCursor = min(len(lines)-1, m.diffScroll+3)
+		m.diffScroll = min(max(0, len(lines)-1), m.diffScroll+3)
+		m.diffCursor = max(0, min(len(lines)-1, m.diffScroll+3))
+		m.diffScroll = m.diffWindowScroll(len(lines))
 		return m, nil
 	case tea.MouseButtonLeft:
 		if mouse.Action != tea.MouseActionPress {

@@ -84,7 +84,7 @@ capture_retry() {
 
 change_id() {
   local repo="$1" path="$2"
-  but -C "$repo" status --json | jq -er --arg path "$path" '(.uncommittedChanges // .unassignedChanges // [])[] | select(.filePath == $path) | .cliId'
+  but -C "$repo" status --json | jq -er --arg path "$path" '.uncommittedChanges[] | select(.filePath == $path) | .cliId'
 }
 
 require_delete_repo_scope() {
@@ -126,7 +126,8 @@ run git -C "$REPO" branch -M main
 run git -C "$REPO" push -u origin main
 
 log "setup GitButler and render lazybut"
-run_retry but -C "$REPO" setup --init
+# GitButler after 0.22 sets repositories up on first use and rejects `setup`.
+run but -C "$REPO" setup --init || true
 run_retry but -C "$REPO" status --json >/dev/null
 run "$BIN" -C "$REPO" -snapshot 140x36 >/dev/null
 run "$BIN" -C "$REPO" -snapshot 96x28 >/dev/null

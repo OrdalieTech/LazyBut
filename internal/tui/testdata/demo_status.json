@@ -1,5 +1,5 @@
 {
-  "unassignedChanges": [
+  "uncommittedChanges": [
     {"cliId": "ab", "filePath": "apps/web/src/components/Toolbar.tsx", "changeType": "modified"},
     {"cliId": "cd", "filePath": "apps/web/src/components/Toast.tsx", "changeType": "added"},
     {"cliId": "ef", "filePath": "apps/web/src/legacy/oldHelper.ts", "changeType": "deleted"},

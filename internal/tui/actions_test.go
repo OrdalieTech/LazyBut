@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/OrdalieTech/LazyBut/internal/gitbutler"
 )
@@ -240,27 +241,43 @@ func TestBootstrapPromptEscDismissesToGuidedState(t *testing.T) {
 	}
 }
 
-func TestGenericConfirmMouseFooter(t *testing.T) {
-	model := newModel(gitbutler.NewClient(".", nil))
-	model.width = 100
-	model.height = 30
-	model.mode = modeConfirm
-	model.confirm = confirmState{Action: action{ID: actionRefresh, Label: "refresh", ConfirmText: "Refresh now?"}}
+func TestConfirmMouseFooterHitsRenderedLabels(t *testing.T) {
+	for _, tc := range []struct {
+		action                    action
+		confirmLabel, cancelLabel string
+	}{
+		{action{ID: actionRefresh, Label: "refresh", ConfirmText: "Refresh now?"}, "enter/y confirm", "esc/n cancel"},
+		{action{ID: actionPull, Label: "update from upstream"}, "y/enter update", "n/esc cancel"},
+	} {
+		model := newModel(gitbutler.NewClient(".", nil))
+		model.width = 100
+		model.height = 30
+		model.loading = false
+		model.mode = modeConfirm
+		model.confirm = confirmState{Action: tc.action}
+		content := model.renderConfirm()
+		x, y, _, _ := overlayBounds(model.width, model.height, content)
+		click := func(label string, offset int) (Model, tea.Cmd) {
+			for row, line := range splitLines(content) {
+				plain := stripAnsi(line)
+				if idx := strings.Index(plain, label); idx >= 0 {
+					next, cmd := model.handleConfirmMouse(tea.MouseMsg{X: x + lipgloss.Width(plain[:idx]) + offset, Y: y + row, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+					return next.(Model), cmd
+				}
+			}
+			t.Fatalf("%s: label %q not rendered:\n%s", tc.action.ID, label, content)
+			return model, nil
+		}
 
-	x, y, w, h := overlayBounds(model.width, model.height, model.renderConfirm())
-	nextModel, cmd := model.handleConfirmMouse(tea.MouseMsg{X: x + 4, Y: y + h - 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
-	next := nextModel.(Model)
-	if !next.loading || cmd == nil {
-		t.Fatalf("confirm click should execute action, loading=%v cmd nil=%v", next.loading, cmd == nil)
-	}
-
-	model.mode = modeConfirm
-	model.loading = false
-	model.confirm = confirmState{Action: action{ID: actionRefresh, Label: "refresh", ConfirmText: "Refresh now?"}}
-	cancelledModel, cmd := model.handleConfirmMouse(tea.MouseMsg{X: x + w - 4, Y: y + h - 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
-	cancelled := cancelledModel.(Model)
-	if cancelled.mode != modeNormal || cmd != nil {
-		t.Fatalf("cancel click = mode %d cmd nil=%v", cancelled.mode, cmd == nil)
+		if next, cmd := click(tc.confirmLabel, 0); !next.loading || cmd == nil {
+			t.Fatalf("%s: confirm click should execute, loading=%v cmd nil=%v", tc.action.ID, next.loading, cmd == nil)
+		}
+		if next, cmd := click(tc.cancelLabel, lipgloss.Width(tc.cancelLabel)-1); next.mode != modeNormal || next.loading || cmd != nil {
+			t.Fatalf("%s: cancel click = mode %d loading %v cmd nil=%v", tc.action.ID, next.mode, next.loading, cmd == nil)
+		}
+		if next, cmd := click(tc.cancelLabel, -2); next.mode != modeConfirm || cmd != nil {
+			t.Fatalf("%s: click between hints should do nothing, mode %d", tc.action.ID, next.mode)
+		}
 	}
 }
 
@@ -340,7 +357,8 @@ func TestCommitOnZZPromptsForBranchWhenAmbiguous(t *testing.T) {
 	if !actionIDs(model.availableActions())[actionCommit] {
 		t.Fatal("commit should be available when a target branch can be selected")
 	}
-	nextModel, cmd := model.startAction(model.actionByID(actionCommit))
+	commit, _ := model.actionByID(actionCommit)
+	nextModel, cmd := model.startAction(commit)
 	next := nextModel.(Model)
 	if cmd != nil || next.mode != modeTargetPicker || len(next.targetPicker.Items) != 2 {
 		t.Fatalf("commit target picker = mode %d, items %d, cmd nil=%v", next.mode, len(next.targetPicker.Items), cmd == nil)
@@ -377,7 +395,7 @@ func TestSquashPickerUsesSelectedSourceAndStableTargetOrder(t *testing.T) {
 	model.laneCursor = 1
 	model.contentCursor = 2 // c2; assigned change is row 0
 
-	action := model.actionByID(actionSquash)
+	action, _ := model.actionByID(actionSquash)
 	picker, ok := model.pickerForAction(action)
 	if !ok {
 		t.Fatal("expected squash target picker")

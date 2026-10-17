@@ -88,10 +88,7 @@ var (
 	styleBadgeConflict = lipgloss.NewStyle().Foreground(colErr).Bold(true)
 	styleMerged        = lipgloss.NewStyle().Foreground(colPurple).Bold(true)
 
-	styleKindFile     = lipgloss.NewStyle().Foreground(colAccent2)
-	styleKindCommit   = lipgloss.NewStyle().Foreground(colOk)
-	styleKindUpstream = lipgloss.NewStyle().Foreground(colWarn)
-	styleKindInfo     = styleDim
+	styleKindInfo = styleDim
 
 	styleHotKey   = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
 	styleHotLabel = lipgloss.NewStyle().Foreground(colMuted)
@@ -224,7 +221,7 @@ func (m Model) renderFlash(width int) string {
 	if m.hasBootstrapIssue() {
 		return ""
 	}
-	text := strings.ReplaceAll(m.err.Error(), "\n", " ")
+	text := strings.ReplaceAll(strings.TrimPrefix(m.err.Error(), "Error: "), "\n", " ")
 	lines := wrapPlain(text, max(8, width-2), 3)
 	out := make([]string, 0, len(lines))
 	for i, line := range lines {
@@ -867,20 +864,6 @@ func lastFileBoundary(items []contentItem) (int, bool) {
 	return fileEnd, true
 }
 
-func (m Model) kanbanStart(total, visible int) int {
-	if visible >= total {
-		return 0
-	}
-	start := m.laneCursor - visible/2
-	if start < 0 {
-		return 0
-	}
-	if start+visible > total {
-		return total - visible
-	}
-	return start
-}
-
 func (m Model) renderLanes(width, height int) string {
 	rows := m.laneLines(max(1, width-4), max(1, height-3))
 	title := titleSpan("workspace", m.focus == panelLanes)
@@ -1217,28 +1200,6 @@ func laneMetaLine(lane lane, width int) string {
 	}
 	sep := styleDim.Render(" " + sepDot + " ")
 	return fit(strings.Join(parts, sep), width)
-}
-
-// ciChip renders a compact CI status badge using Branch.CI counts. Pending in
-// yellow, passing in green, failing in red — same convention as GitHub.
-func ciChip(lane lane) string {
-	if !lane.CIPresent {
-		return ""
-	}
-	parts := []string{}
-	if lane.CIFailing > 0 {
-		parts = append(parts, styleErr.Render(fmt.Sprintf("%s%d", glyphCross, lane.CIFailing)))
-	}
-	if lane.CIPending > 0 {
-		parts = append(parts, styleWarn.Render(fmt.Sprintf("…%d", lane.CIPending)))
-	}
-	if lane.CIPassing > 0 {
-		parts = append(parts, styleOk.Render(fmt.Sprintf("%s%d", glyphCheck, lane.CIPassing)))
-	}
-	if len(parts) == 0 {
-		return styleDim.Render("CI ?")
-	}
-	return strings.Join(parts, " ")
 }
 
 // laneFooterLine renders the pinned status footer at the bottom of a kanban
@@ -1619,7 +1580,9 @@ func normalizePreviewRows(body string) ([]string, bool) {
 		if isBoxDecoration(row) || isPreviewDuplicateFileHeader(row) {
 			continue
 		}
-		out = append(out, row)
+		// fit() counts a tab as zero width but lipgloss renders four spaces,
+		// so tab-indented diffs would overflow and wrap.
+		out = append(out, strings.ReplaceAll(row, "\t", "    "))
 	}
 	if len(out) == 0 {
 		return []string{styleDim.Render("(empty)")}, false
@@ -2067,15 +2030,25 @@ func (m Model) renderConfirm() string {
 	if m.confirm.Input != "" {
 		body += "\n\n" + styleDim.Render(m.confirm.Input)
 	}
-	confirmLabel, cancelLabel := "confirm", "cancel"
+	return styleOverlay.Width(width).Render(header + "\n\n" + body + "\n\n" + modalFooter(m.confirmFooterHints()...))
+}
+
+func upstreamConfirmHints() []string {
+	return []string{keyHint("y/enter", "update"), keyHint("u", "dry-check"), keyHint("n/esc", "cancel")}
+}
+
+// confirmFooterHints lists the confirm footer hints: the first accepts, the
+// last cancels. Mouse hit-testing reads the same list.
+func (m Model) confirmFooterHints() []string {
 	switch m.confirm.Action.ID {
+	case actionPull:
+		return upstreamConfirmHints()
 	case actionInstallGitButler:
-		confirmLabel, cancelLabel = "install", "later"
+		return []string{keyHint("enter/y", "install"), keyHint("esc/n", "later")}
 	case actionSetup:
-		confirmLabel, cancelLabel = "run setup", "later"
+		return []string{keyHint("enter/y", "run setup"), keyHint("esc/n", "later")}
 	}
-	footer := styleHotKey.Render("enter/y") + " " + styleHotLabel.Render(confirmLabel) + "   " + styleHotKey.Render("esc/n") + " " + styleHotLabel.Render(cancelLabel)
-	return styleOverlay.Width(width).Render(header + "\n\n" + body + "\n\n" + footer)
+	return []string{keyHint("enter/y", "confirm"), keyHint("esc/n", "cancel")}
 }
 
 func (m Model) renderUpstreamConfirm() string {
@@ -2118,12 +2091,7 @@ func (m Model) renderUpstreamConfirm() string {
 	if hasConflicts {
 		rows = append(rows, "", styleErr.Render(glyphConflict+" known conflicts — review before applying"))
 	}
-	footer := modalFooter(
-		keyHint("y/enter", "update"),
-		keyHint("u", "dry-check"),
-		keyHint("n/esc", "cancel"),
-	)
-	return renderModal(width, title, strings.Join(rows, "\n"), footer)
+	return renderModal(width, title, strings.Join(rows, "\n"), modalFooter(upstreamConfirmHints()...))
 }
 
 func (m Model) renderIncomingCard(width int) string {
@@ -2223,19 +2191,6 @@ func (m Model) upstreamConfirmRowAt(y int) (int, bool) {
 		return 0, false
 	}
 	return windowStart(len(lanes), m.confirm.Cursor, visible) + row, true
-}
-
-func (m Model) isUpstreamConfirmFooter(x, y int) bool {
-	visible := m.upstreamBranchRowBudget(len(m.upstreamConfirmLanes()))
-	fixedAbove := 10
-	conflictRows := 0
-	if m.hasUpstreamConflicts() {
-		conflictRows = 2
-	}
-	modalH := fixedAbove + visible + conflictRows + 3
-	startY := max(0, (m.height-modalH)/2)
-	footerY := startY + fixedAbove + visible + conflictRows + 1
-	return y == footerY && x >= 0 && x < m.width
 }
 
 func (m Model) upstreamBranchLanes() []lane {
@@ -2346,22 +2301,7 @@ func (m Model) renderDiffView() string {
 		m.diffCursor = max(0, len(lines)-1)
 	}
 
-	// Window the lines around the cursor, keeping it in view.
-	scroll := m.diffScroll
-	if m.diffCursor < scroll {
-		scroll = m.diffCursor
-	}
-	if m.diffCursor >= scroll+bodyH {
-		scroll = m.diffCursor - bodyH + 1
-	}
-	if scroll < 0 {
-		scroll = 0
-	}
-	maxScroll := max(0, len(lines)-bodyH)
-	if scroll > maxScroll {
-		scroll = maxScroll
-	}
-	m.diffScroll = scroll
+	scroll := m.diffWindowScroll(len(lines))
 
 	bodyLines := make([]string, 0, bodyH)
 	for i := scroll; i < len(lines) && len(bodyLines) < bodyH; i++ {
@@ -2380,13 +2320,13 @@ func (m Model) renderDiffView() string {
 	// Footer: action hints + scroll position.
 	pos := ""
 	if len(lines) > bodyH {
-		pct := scroll * 100 / max(1, maxScroll)
+		pct := scroll * 100 / (len(lines) - bodyH)
 		pos = styleDim.Render(fmt.Sprintf(" %d%%", pct))
 	}
 	hints := []string{styleHotKey.Render("j/k") + " " + styleHotLabel.Render("navigate")}
 	if item.Kind == contentChange {
 		hints = append(hints,
-			styleHotKey.Render("m")+" "+styleHotLabel.Render("assign"),
+			styleHotKey.Render("c")+" "+styleHotLabel.Render("commit"),
 			styleHotKey.Render("d")+" "+styleHotLabel.Render("discard"),
 		)
 	}
@@ -2528,7 +2468,7 @@ func (m Model) renderTargetPicker() string {
 		}
 		fitted := fit("  "+item.Label, innerW-lipgloss.Width(meta))
 		if idx == m.targetPicker.Cursor {
-			rows = append(rows, styleSelectedRow.Render(padRight("▸ "+fitted[2:]+meta, innerW)))
+			rows = append(rows, styleSelectedRow.Render(padRight("▸ "+strings.TrimPrefix(fitted, "  ")+meta, innerW)))
 			continue
 		}
 		rows = append(rows, fitted+meta)
@@ -2826,26 +2766,6 @@ func ansiSplit(s string, cols int) (left, right string) {
 		return "", s
 	}
 	return ansi.Cut(s, 0, cols), ansi.Cut(s, cols, ansi.StringWidth(s))
-}
-
-func itemKindLabel(kind contentKind) string {
-	switch kind {
-	case contentChange:
-		return "file"
-	case contentCommit:
-		return "commit"
-	case contentUpstreamCommit:
-		return "upstr"
-	default:
-		return "info"
-	}
-}
-
-func preserveID(id, label string, maxLabelWidth int) string {
-	if id == "-" {
-		return fit(label, maxLabelWidth)
-	}
-	return id + " " + fit(label, max(1, maxLabelWidth-lipgloss.Width(id)-1))
 }
 
 func contentWidth(width int) int {

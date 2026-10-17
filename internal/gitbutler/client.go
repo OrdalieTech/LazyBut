@@ -32,6 +32,8 @@ func (r ExecRunner) Run(ctx context.Context, dir string, args ...string) ([]byte
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = dir
+	// Return at the deadline even if a grandchild (git, ssh) holds the pipes.
+	cmd.WaitDelay = time.Second
 	// Keep diagnostics out of successful JSON and text output.
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -101,7 +103,7 @@ func (c *Client) Status(ctx context.Context) (*WorkspaceStatus, error) {
 	if err := c.runJSON(ctx, &status, "status", "--json", "--upstream"); err != nil {
 		return nil, err
 	}
-	c.enrichStatusWithGitHubPRs(ctx, &status)
+	c.enrichStatusWithGitHubPRs(&status)
 	return &status, nil
 }
 
@@ -144,15 +146,15 @@ func (c *Client) BranchList(ctx context.Context) (*BranchList, error) {
 	if err := c.runJSON(ctx, &branches, "branch", "list", "--json", "--all"); err != nil {
 		return nil, err
 	}
-	c.enrichBranchListWithGitHubPRs(ctx, &branches)
+	c.enrichBranchListWithGitHubPRs(&branches)
 	return &branches, nil
 }
 
-func (c *Client) enrichStatusWithGitHubPRs(ctx context.Context, status *WorkspaceStatus) {
+func (c *Client) enrichStatusWithGitHubPRs(status *WorkspaceStatus) {
 	if status == nil || !statusHasGitHubPRCandidates(status) {
 		return
 	}
-	prs := c.githubPullRequests(ctx)
+	prs := c.githubPullRequests()
 	if len(prs) == 0 {
 		return
 	}
@@ -186,11 +188,11 @@ func statusHasGitHubPRCandidates(status *WorkspaceStatus) bool {
 	return false
 }
 
-func (c *Client) enrichBranchListWithGitHubPRs(ctx context.Context, branches *BranchList) {
+func (c *Client) enrichBranchListWithGitHubPRs(branches *BranchList) {
 	if branches == nil || !branchListHasGitHubPRCandidates(branches) {
 		return
 	}
-	prs := c.githubPullRequests(ctx)
+	prs := c.githubPullRequests()
 	if len(prs) == 0 {
 		return
 	}
@@ -234,59 +236,27 @@ type githubPullRequest struct {
 	MergedAt    string `json:"mergedAt"`
 }
 
-func (c *Client) githubPullRequests(ctx context.Context) map[string]Review {
+// githubPullRequests serves the cached PRs by head branch and refreshes an
+// expired cache in the background, so status loads never wait on GitHub.
+func (c *Client) githubPullRequests() map[string]Review {
 	if !c.shouldUseGitHubFallback() {
 		return nil
 	}
-
-	now := time.Now()
 	c.githubMu.Lock()
-	if now.Before(c.githubPRsExpiresAt) {
-		prs := maps.Clone(c.githubPRs)
-		c.githubMu.Unlock()
-		return prs
+	defer c.githubMu.Unlock()
+	now := time.Now()
+	if !now.Before(c.githubPRsExpiresAt) && !now.Before(c.githubPRErrorBackoff) && !c.githubRefreshInFlight {
+		c.githubRefreshInFlight = true
+		go c.fetchGitHubPullRequests()
 	}
-	if c.githubPRs != nil {
-		// Stale-while-revalidate: serve the expired cache immediately and
-		// refresh once in the background, so only the first fill ever blocks
-		// Status/BranchList on `gh pr list`.
-		prs := maps.Clone(c.githubPRs)
-		if !now.Before(c.githubPRErrorBackoff) && !c.githubRefreshInFlight {
-			c.githubRefreshInFlight = true
-			go func() {
-				defer func() {
-					c.githubMu.Lock()
-					c.githubRefreshInFlight = false
-					c.githubMu.Unlock()
-				}()
-				// The caller's ctx is cancelled once its Status/BranchList
-				// returns, so the refresh must run on its own context.
-				c.fetchGitHubPullRequests(context.Background())
-			}()
-		}
-		c.githubMu.Unlock()
-		return prs
-	}
-	if now.Before(c.githubPRErrorBackoff) {
-		c.githubMu.Unlock()
-		return nil
-	}
-	c.githubMu.Unlock()
-
-	return c.fetchGitHubPullRequests(ctx)
+	return maps.Clone(c.githubPRs)
 }
 
-func (c *Client) fetchGitHubPullRequests(ctx context.Context) map[string]Review {
-	ghCtx, cancel := context.WithTimeout(ctx, githubPRTimeout)
+func (c *Client) fetchGitHubPullRequests() {
+	ctx, cancel := context.WithTimeout(context.Background(), githubPRTimeout)
 	defer cancel()
 	var raw []githubPullRequest
-	if err := c.runGHJSON(ghCtx, &raw, "pr", "list", "--state", "all", "--json", "number,url,headRefName,state,mergedAt", "--limit", githubPRListLimit); err != nil {
-		c.githubMu.Lock()
-		c.githubPRErrorBackoff = time.Now().Add(githubPRErrorTTL)
-		c.githubMu.Unlock()
-		return nil
-	}
-
+	err := c.runGHJSON(ctx, &raw, "pr", "list", "--state", "all", "--json", "number,url,headRefName,state,mergedAt", "--limit", githubPRListLimit)
 	prs := make(map[string]Review, len(raw))
 	for _, pr := range raw {
 		if pr.HeadRefName == "" || pr.Number == 0 || pr.URL == "" {
@@ -299,11 +269,15 @@ func (c *Client) fetchGitHubPullRequests(ctx context.Context) map[string]Review 
 	}
 
 	c.githubMu.Lock()
-	c.githubPRs = maps.Clone(prs)
+	defer c.githubMu.Unlock()
+	c.githubRefreshInFlight = false
+	if err != nil {
+		c.githubPRErrorBackoff = time.Now().Add(githubPRErrorTTL)
+		return
+	}
+	c.githubPRs = prs
 	c.githubPRsExpiresAt = time.Now().Add(githubPRCacheTTL)
 	c.githubPRErrorBackoff = time.Time{}
-	c.githubMu.Unlock()
-	return prs
 }
 
 func (c *Client) Setup(ctx context.Context, init bool) (*WorkspaceStatus, error) {
@@ -346,6 +320,7 @@ func (c *Client) Unapply(ctx context.Context, branch string) (*WorkspaceStatus, 
 func (c *Client) NewBranch(ctx context.Context, name string, anchor string) (*WorkspaceStatus, error) {
 	args := []string{"branch", "new"}
 	if anchor != "" {
+		// --above only exists from 0.22.1; --anchor is deprecated but still accepted.
 		args = append(args, "--anchor", anchor)
 	}
 	args = append(args, name)
@@ -487,8 +462,18 @@ func (c *Client) Clean(ctx context.Context) (*WorkspaceStatus, error) {
 	return c.mutate(ctx, "clean")
 }
 
-func (c *Client) Discard(ctx context.Context, target string) (*WorkspaceStatus, error) {
-	return c.mutate(ctx, "discard", target)
+func (c *Client) Discard(ctx context.Context, targets ...string) (*WorkspaceStatus, error) {
+	args := []string{"discard"}
+	for _, target := range targets {
+		if target != "" {
+			args = append(args, target)
+		}
+	}
+	// `but discard` without targets discards every uncommitted change.
+	if len(args) == 1 {
+		return nil, errors.New("refusing to discard without selected change IDs")
+	}
+	return c.mutate(ctx, args...)
 }
 
 func (c *Client) runJSON(ctx context.Context, out any, args ...string) error {
@@ -524,6 +509,10 @@ func (c *Client) runText(ctx context.Context, args ...string) (string, error) {
 func (c *Client) runGit(ctx context.Context, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = c.Dir
+	// Background fetches must fail rather than prompt over the TUI, and return
+	// at the deadline even if a credential helper or ssh holds the pipes.
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.WaitDelay = time.Second
 	raw, err := cmd.CombinedOutput()
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return raw, ctxErr
@@ -540,15 +529,21 @@ func (c *Client) runGit(ctx context.Context, args ...string) ([]byte, error) {
 
 func (c *Client) mutate(ctx context.Context, args ...string) (*WorkspaceStatus, error) {
 	args = append(append([]string{}, args...), "--json", "--status-after")
+	raw, err := c.runner().Run(ctx, c.Dir, args...)
+	if err != nil {
+		return nil, parseCommandError(raw, err)
+	}
+	// `land` and `setup` succeed without printing JSON, and a failed
+	// status-after is reported as a `status_error` string: reload either way.
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return c.Status(ctx)
+	}
 	var wrapped StatusAfter
-	if err := c.runJSON(ctx, &wrapped, args...); err != nil {
-		return nil, err
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return nil, fmt.Errorf("parse `but %s`: %w", strings.Join(args, " "), err)
 	}
 	if wrapped.Status != nil {
 		return wrapped.Status, nil
-	}
-	if wrapped.StatusError != nil {
-		return nil, wrapped.StatusError
 	}
 	return c.Status(ctx)
 }
@@ -596,7 +591,8 @@ func parseCommandError(raw []byte, runErr error) error {
 	if text == "" {
 		return runErr
 	}
-	return fmt.Errorf("%s: %s", runErr, text)
+	// `but` explains itself on stderr; "exit status 1" in front is noise.
+	return errors.New(text)
 }
 
 func parseGitChanges(raw []byte) []FileChange {
