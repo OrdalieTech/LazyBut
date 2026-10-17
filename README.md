@@ -24,8 +24,8 @@ GitButler behavior to the official `but` CLI instead of reimplementing Git logic
 
 ## Requirements
 
-- GitButler CLI 0.22 or newer available as `but` (tested with 0.22.0 and 0.22.3; the installer can install it for you)
-- A Git repository; LazyBut can offer to run `but setup` on first start
+- GitButler CLI 0.22 or newer available as `but` (tested with 0.22.3 and nightly 0.5.2228; the installer can install it for you)
+- A Git repository; with 0.22 LazyBut can offer to run `but setup` on first start, newer CLIs set repositories up on their own
 - A terminal with color support; mouse support is optional but enabled when available
 - Go 1.27.1+ only if building from source
 
@@ -168,7 +168,7 @@ go run ./cmd/lazybut -C /path/to/repo -snapshot 96x32
 go run ./cmd/lazybut -C /path/to/repo -snapshot 60x24
 ```
 
-`scripts/e2e-local.sh` builds `lazybut`, creates disposable repositories under the system temporary directory, exercises GitButler setup, responsive snapshots, selected-change commits, branch stacks, history edits, push dry-run, push, pull check, pull, undo, oplog snapshot, clean, local land, and the missing-`but` error, then tears the repositories down.
+`scripts/e2e-local.sh` builds `lazybut`, renders responsive snapshots of a disposable repository, and runs `TestClientAgainstRealGitButler`, which drives every client mutation (commits, stacks, amend, squash, absorb, move, uncommit, discard, push, pull, undo, oplog, clean, apply/unapply, land) through the installed `but` against a local bare remote. Point `PATH` at another `but` build to check a new GitButler release before it ships.
 
 For the real GitHub path, run:
 

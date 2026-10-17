@@ -9,29 +9,10 @@ import (
 
 type WorkspaceStatus struct {
 	ConflictedFiles   []string      `json:"conflictedFiles"`
-	UnassignedChanges []FileChange  `json:"unassignedChanges"`
+	UnassignedChanges []FileChange  `json:"uncommittedChanges"`
 	Stacks            []Stack       `json:"stacks"`
 	MergeBase         Commit        `json:"mergeBase"`
 	UpstreamState     UpstreamState `json:"upstreamState"`
-}
-
-// UnmarshalJSON accepts both the historical `unassignedChanges` key and the
-// newer `uncommittedChanges` key that current `but` builds emit for the zz
-// lane. Without this, a CLI upgrade silently empties the unassigned column.
-func (w *WorkspaceStatus) UnmarshalJSON(raw []byte) error {
-	type ws WorkspaceStatus // strip the custom method to avoid recursion
-	var shadow struct {
-		ws
-		Uncommitted []FileChange `json:"uncommittedChanges"`
-	}
-	if err := json.Unmarshal(raw, &shadow); err != nil {
-		return err
-	}
-	*w = WorkspaceStatus(shadow.ws)
-	if shadow.Uncommitted != nil {
-		w.UnassignedChanges = shadow.Uncommitted
-	}
-	return nil
 }
 
 type UpstreamState struct {
@@ -144,23 +125,20 @@ type Review struct {
 }
 
 type StatusAfter struct {
-	Result      json.RawMessage  `json:"result"`
-	Status      *WorkspaceStatus `json:"status"`
-	StatusError *CLIError        `json:"status_error"`
+	Result json.RawMessage  `json:"result"`
+	Status *WorkspaceStatus `json:"status"`
 }
 
 func (s *StatusAfter) UnmarshalJSON(raw []byte) error {
 	var decoded struct {
-		Result      json.RawMessage `json:"result"`
-		Status      json.RawMessage `json:"status"`
-		StatusError *CLIError       `json:"status_error"`
+		Result json.RawMessage `json:"result"`
+		Status json.RawMessage `json:"status"`
 	}
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		return err
 	}
 	s.Result = decoded.Result
 	s.Status = nil
-	s.StatusError = decoded.StatusError
 
 	statusRaw := bytes.TrimSpace(decoded.Status)
 	if len(statusRaw) == 0 || bytes.Equal(statusRaw, []byte("null")) {

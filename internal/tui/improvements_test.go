@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/OrdalieTech/LazyBut/internal/gitbutler"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -179,6 +180,76 @@ func TestEnterToInspectWaitsForPendingDiff(t *testing.T) {
 	}
 	if m.diffPending {
 		t.Fatalf("diffPending should clear once honored")
+	}
+}
+
+// Keyboard navigation must keep the stored diff scroll in sync with what is
+// drawn, so a later click selects the row under the pointer.
+func TestDiffViewClickAfterKeyboardScroll(t *testing.T) {
+	m := modelWithActiveBranches(t, 2, 100, 30)
+	m.previewTarget = "x1"
+	lines := make([]string, 200)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("+line %d", i)
+	}
+	model, _ := m.update(textMsg{target: "x1", body: strings.Join(lines, "\n")})
+	model, _ = model.(Model).enterDiffMode()
+	for range 100 {
+		model, _ = model.(Model).handleDiffKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	}
+	model, _ = model.(Model).handleDiffMouse(tea.MouseMsg{X: 5, Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	m = model.(Model)
+	if m.diffScroll == 0 || m.diffCursor != m.diffScroll {
+		t.Fatalf("click on the top body row: cursor %d, scroll %d", m.diffCursor, m.diffScroll)
+	}
+}
+
+// Dialogs act on the selection when accepted, so a background refresh landing
+// while one is open must not move it, and consumed marks must not linger.
+func TestDialogSelectionSurvivesRefreshAndMutationClearsMarks(t *testing.T) {
+	m := modelWithActiveBranches(t, 2, 100, 30)
+	m.laneCursor = 1
+	before, _ := m.selectedLane()
+	m.mode = modeConfirm
+	m.autoRefreshInFlight = true
+	model, _ := m.update(autoRefreshMsg{status: &gitbutler.WorkspaceStatus{}})
+	m = model.(Model)
+	if after, _ := m.selectedLane(); after.Key != before.Key {
+		t.Fatalf("refresh moved the confirmed lane from %q to %q", before.Key, after.Key)
+	}
+
+	// A dialog opened while the mutation ran still acts on the user's marks.
+	m.selected = map[string]bool{"x1": true}
+	model, _ = m.update(mutationMsg{label: "pushed", status: m.data.Status})
+	if marks := model.(Model).selected; !marks["x1"] {
+		t.Fatalf("marks under an open dialog were cleared: %v", marks)
+	}
+	m.mode = modeNormal
+	model, _ = m.update(mutationMsg{label: "committed", status: m.data.Status})
+	if marks := model.(Model).selected; len(marks) != 0 {
+		t.Fatalf("marks survived the mutation: %v", marks)
+	}
+}
+
+// A background refresh that keeps the same row selected reloads its preview
+// in place instead of blanking it and resetting the scroll every 3s.
+func TestRefreshKeepsPreviewOfSameTarget(t *testing.T) {
+	m := modelWithActiveBranches(t, 1, 100, 30)
+	m.laneCursor = 1
+	model, _ := m.withPreview()
+	target := model.previewTarget
+	if target == "" {
+		t.Fatal("fixture selection has no preview target")
+	}
+	updated, _ := model.update(textMsg{seq: model.previewSeq, target: target, body: "+line"})
+	m = updated.(Model)
+	m.previewScroll = 1
+	m.autoRefreshInFlight = true
+
+	updated, cmd := m.update(autoRefreshMsg{status: loadFixtureStatus(t)})
+	m = updated.(Model)
+	if m.preview != "+line" || m.previewScroll != 1 || cmd == nil {
+		t.Fatalf("preview %q scroll %d reload nil=%v", m.preview, m.previewScroll, cmd == nil)
 	}
 }
 
@@ -358,6 +429,7 @@ func contentRowCount(items []contentItem, meta bool) int {
 func TestKanbanColumnRowsMatchesNaiveReference(t *testing.T) {
 	for _, tc := range differentialContentCases(t) {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			m := newModel(nil)
 			m.loading = false
 			m.data = buildWorkspaceData(loadFixtureStatus(t), loadFixtureBranches(t))
@@ -383,6 +455,7 @@ func TestKanbanColumnRowsMatchesNaiveReference(t *testing.T) {
 func TestContentLinesMatchesNaiveReference(t *testing.T) {
 	for _, tc := range differentialContentCases(t) {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			m := newModel(nil)
 			m.loading = false
 			m.data = buildWorkspaceData(loadFixtureStatus(t), loadFixtureBranches(t))

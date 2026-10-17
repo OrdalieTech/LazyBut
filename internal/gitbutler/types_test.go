@@ -32,22 +32,6 @@ func TestWorkspaceStatusUnmarshal(t *testing.T) {
 	}
 }
 
-// Current `but` builds renamed the zz-lane key from `unassignedChanges` to
-// `uncommittedChanges`; both must populate UnassignedChanges.
-func TestWorkspaceStatusAcceptsUncommittedChangesKey(t *testing.T) {
-	raw := []byte(`{"uncommittedChanges":[{"cliId":"yrp","filePath":"a.go","changeType":"added"},{"cliId":"ks","filePath":"b.go","changeType":"modified"}],"stacks":[]}`)
-	var status WorkspaceStatus
-	if err := json.Unmarshal(raw, &status); err != nil {
-		t.Fatal(err)
-	}
-	if got := len(status.UnassignedChanges); got != 2 {
-		t.Fatalf("unassigned changes = %d, want 2", got)
-	}
-	if status.UnassignedChanges[0].FilePath != "a.go" {
-		t.Fatalf("file path = %q", status.UnassignedChanges[0].FilePath)
-	}
-}
-
 func TestBranchListUnmarshal(t *testing.T) {
 	raw, err := os.ReadFile("testdata/branch_list.json")
 	if err != nil {
@@ -69,7 +53,7 @@ func TestBranchListUnmarshal(t *testing.T) {
 
 func TestCurrentStatusFields(t *testing.T) {
 	var status WorkspaceStatus
-	err := json.Unmarshal([]byte(`{"unassignedChanges":[{"filePath":"stale"}],"uncommittedChanges":[],"conflictedFiles":["conflict.txt"],"stacks":[{"branches":[{"ci":{"status":"inProgress","conclusion":"failure"}}]}]}`), &status)
+	err := json.Unmarshal([]byte(`{"uncommittedChanges":[],"conflictedFiles":["conflict.txt"],"stacks":[{"branches":[{"ci":{"status":"inProgress","conclusion":"failure"}}]}]}`), &status)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -365,8 +365,8 @@ func TestCommitActionUsesMessagePrompt(t *testing.T) {
 	model.laneCursor = 0 // zz so a change is selected
 	model.contentCursor = 0
 
-	commit := model.actionByID(actionCommit)
-	if commit.ID != actionCommit {
+	commit, ok := model.actionByID(actionCommit)
+	if !ok {
 		t.Fatalf("commit action not available: %#v", commit)
 	}
 	updated, _ := model.startAction(commit)
