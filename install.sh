@@ -62,7 +62,7 @@ elif [[ "${LAZYBUT_INSTALL_GITBUTLER:-}" == "1" ]]; then
 elif [[ "${LAZYBUT_INSTALL_GITBUTLER:-}" == "0" ]]; then
   echo "GitButler CLI not installed. LazyBut needs 'but' to run."
   echo "Install later with: curl -fsSL ${gitbutler_install_url} | sh"
-elif [[ -r /dev/tty ]]; then
+elif { : </dev/tty; } 2>/dev/null; then
   printf "GitButler CLI ('but') is required. Install it now? [y/N] " > /dev/tty
   read -r answer < /dev/tty
   case "$answer" in
